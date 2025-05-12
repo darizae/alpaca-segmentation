@@ -266,6 +266,17 @@ def parse_hum(path: Path):
     uid = next_uid()
     spec_rel = save_spec(y, sr, uid)
 
+    # parse absolute times
+    h0 = float(g["hum_start"])
+    h1 = float(g["hum_end"])
+    c0 = float(clip_g["clip_start"])
+    c1 = float(clip_g["clip_end"])
+
+    # only compute a clip‐relative offset if the hum really sits inside the clip
+    inside = (h0 >= c0) and (h1 <= c1)
+    start_rel = (h0 - c0) if inside else None
+    end_rel = (h1 - c0) if inside else None
+
     HUMS.append(
         Hum(
             uid=uid,
@@ -285,10 +296,10 @@ def parse_hum(path: Path):
             clip_uid=clip_uid,
             clip_start_s=float(clip_g["clip_start"]),
             clip_end_s=float(clip_g["clip_end"]),
-            hum_start_s=float(g["hum_start"]),
-            hum_end_s=float(g["hum_end"]),
-            hum_start_rel_clip_s=float(g["hum_start"]) - float(clip_g["clip_start"]),
-            hum_end_rel_clip_s=float(g["hum_end"]) - float(clip_g["clip_start"]),
+            hum_start_s=h0,
+            hum_end_s=h1,
+            hum_start_rel_clip_s=start_rel,
+            hum_end_rel_clip_s=end_rel,
             quality=int(g["q"]),
         )
     )
