@@ -93,22 +93,48 @@ def load_dataframe(which: Literal["raw", "clips", "hums"],
 
 @dataclass(slots=True)
 class _Entry:
-    """Light wrapper around one row of *index_hums.json*."""
+    """Row wrapper for **index_hums.json** with *both* timelines."""
 
     uid: int
     spec_png_path: str
-    hum_start_rel_clip_s: float
-    hum_end_rel_clip_s: float
+    spec_path: str
+    path: str  # wav path relative to data dir
+
+    # clip‑relative (maybe None if hum outside 15‑s window)
+    hum_start_rel_clip_s: Optional[float]
+    hum_end_rel_clip_s: Optional[float]
+
+    # raw‑timeline (always present)
+    hum_start_s: float
+    hum_end_s: float
+
+    # misc
     quality: int
+    animal_id: str
+    date: str
+    clip_uid: int
+    raw_uid: int
+    clip_start_s: float
+    clip_end_s: float
 
     @classmethod
-    def from_row(cls, row: pd.Series) -> "_Entry":
+    def from_row(cls, r: pd.Series) -> "_Entry":
         return cls(
-            uid=row.uid,
-            spec_png_path=row.spec_png_path,
-            hum_start_rel_clip_s=row.hum_start_rel_clip_s,
-            hum_end_rel_clip_s=row.hum_end_rel_clip_s,
-            quality=row.quality,
+            uid=r.uid,
+            spec_png_path=r.spec_png_path,
+            spec_path=r.spec_path,
+            path=r.path,
+            hum_start_rel_clip_s=r.hum_start_rel_clip_s,
+            hum_end_rel_clip_s=r.hum_end_rel_clip_s,
+            hum_start_s=r.hum_start_s,
+            hum_end_s=r.hum_end_s,
+            quality=r.quality,
+            animal_id=r.animal_id,
+            date=r.date,
+            clip_uid=r.clip_uid,
+            raw_uid=r.raw_uid,
+            clip_start_s=r.clip_start_s,
+            clip_end_s=r.clip_end_s,
         )
 
 
@@ -174,10 +200,10 @@ class AlpacaDataset(Dataset):
 
         # -------- target (what the loss needs) --------
         target = {
-            "t_start_raw":  t_start_raw,
-            "t_end_raw":    t_end_raw,
+            "t_start_raw": t_start_raw,
+            "t_end_raw": t_end_raw,
             "t_start_clip": t_start_clip,
-            "t_end_clip":   t_end_clip,
+            "t_end_clip": t_end_clip,
             "quality": torch.tensor(entry.quality, dtype=torch.int64),
             "loss_weight": torch.tensor(1.0 + 0.2 * (5 - entry.quality),
                                         dtype=torch.float32)  # example weighting
