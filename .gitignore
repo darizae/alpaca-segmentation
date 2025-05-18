@@ -4,6 +4,7 @@ data/raw_recordings/
 data/segmented_wav_onlyhums/
 data/spec_cache/
 data/spec_png_cache_rgb8/
+data/prepared/
 
 # Ignore all .zip files in data/
 data/*.zip
