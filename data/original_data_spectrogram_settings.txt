@@ -1,0 +1,6 @@
+Spectrogram settings used for analysis:
+
+* **Window type**: Hann
+* **Window size**: 2002 samples (equivalent to 41.7 ms at 48 kHz sampling rate)
+* **Hop size**: 1001 samples (50% overlap)
+* **Frequency range**: 0–4000 Hz (filtered to focus on hum-like vocalisations)

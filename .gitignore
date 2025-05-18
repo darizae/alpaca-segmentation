@@ -1,4 +1,12 @@
-/data
+# Ignore all folders in data/
+data/labelled_recordings/
+data/raw_recordings/
+data/segmented_wav_onlyhums/
+data/spec_cache/
+data/spec_png_cache_rgb8/
+
+# Ignore all .zip files in data/
+data/*.zip
 
 # Ignore Python bytecode and cache
 __pycache__/

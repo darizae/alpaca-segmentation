@@ -1,0 +1,5 @@
+raw_recordings/: Contains a small set of original, unprocessed audio files (e.g., 387_20201207_cut.wav), representing full-length recordings.
+
+labelled_recordings/: Includes full recordings that have been manually labelled for the presence of hum-like vocalisations. Files follow the naming format originalFilename.wav_startTime[s]_endTime[s].wav. If a file is present but contains no labels, it likely did not include hums.
+
+segmented_wav_onlyhums/: Contains cropped segments extracted from the labelled recordings, each corresponding to a detected hum-like vocalisation. File names follow the format originalFile.wav_segment.wav_startTime[s]_endTime[s]Q[quality].wav, where startTime and endTime denote the precise segment boundaries in seconds, and Q[quality] indicates the annotation quality level (e.g., Q2, Q3, Q4).

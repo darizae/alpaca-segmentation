@@ -1,0 +1,24 @@
+* **Collect raw audio** in full-length recordings (e.g., `387_20201207_cut.wav`)
+* **Manually annotate** each raw recording for hum-like vocalisations, marking segment start and end times in seconds
+* **Export labelled files**: for each annotated segment, save a copy named
+
+  ```
+  originalFilename.wav_startTime[s]_endTime[s].wav
+  ```
+
+  under `labelled_recordings/`
+* **Crop hum segments** from labelled recordings to produce “only hum” clips
+* **Assign quality scores** to each cropped segment and append as `Q[quality]` in the filename:
+
+  ```
+  originalFilename.wav_start_end[s]_[segmentStart]_[segmentEnd]Q[quality].wav
+  ```
+* **Organize directory structure**:
+
+  ```
+  raw_recordings/
+  labelled_recordings/
+  segmented_wav_onlyhums/
+  ```
+* **Filter audio content** to 0–4000 Hz to retain only the hum-relevant band
+* **Compute spectrograms** using a Hann window of 2002 samples (41.7 ms) with 50% overlap (hop size = 1001 samples) on the filtered clips
