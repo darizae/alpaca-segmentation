@@ -107,12 +107,18 @@ def main(opts):
         raw_name = cm["orig"]  # e.g. 387_20201207_cut.wav
         rm = RAW_RE.match(raw_name)
         year = rm["date"][:4]
-        tape = raw_name.replace(".wav", "")
+
+        def _clean_tape(name: str) -> str:
+            """Strip .wav and turn all internal '_' into '-'."""
+            return name.replace(".wav", "").replace("_", "-")
+
+        tape_raw  = raw_name.replace(".wav", "")      # for overlap map
+        tape_clean = _clean_tape(raw_name)            # for filename
 
         # ---------------- copy target
         uid = next(uid_gen)
         h0, h1 = float(hm["h0"]), float(hm["h1"])
-        tgt_fn = build_name("target", f"Q{hm['q']}", uid, year, tape, ms(h0), ms(h1))
+        tgt_fn = build_name("target", f"Q{hm['q']}", uid, year, tape_clean, ms(h0), ms(h1))
         if not opts.dry_run:
             shutil.copy2(hum_fp, out_dir / tgt_fn)
         exported_targets += 1
@@ -124,8 +130,8 @@ def main(opts):
             lbl_fp = lbl_clips / clip_name
             container = Interval(float(cm["c0"]), float(cm["c1"]))
             occupied = [Interval(h0, h1)]
-            if tape in tape2hums:  # global list for fallback collision check
-                occupied = tape2hums[tape]
+            if tape_raw in tape2hums:      # use raw key here
+                occupied = tape2hums[tape_raw]
 
             slot = find_free_slot(dur, container, occupied)
             source_fp = lbl_fp if lbl_fp.exists() else None
@@ -148,7 +154,7 @@ def main(opts):
             start_fr, stop_fr = int(s_sec * info.samplerate), int(e_sec * info.samplerate)
             audio, _ = sf.read(source_fp, start=start_fr, stop=stop_fr)
             uid_n = next(uid_gen)
-            ns_fn = build_name("noise", "bg", uid_n, year, tape, ms(s_sec), ms(e_sec))
+            ns_fn = build_name("noise", "bg", uid_n, year, tape_clean, ms(s_sec), ms(e_sec))
             if not opts.dry_run:
                 sf.write(out_dir / ns_fn, audio, info.samplerate)
             exported_noise += 1
