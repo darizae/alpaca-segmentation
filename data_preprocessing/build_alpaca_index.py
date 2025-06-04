@@ -1,332 +1,298 @@
 #!/usr/bin/env python
-# build_alpaca_index.py  – v1.1  (handles missing raw recordings)
-# ---------------------------------------------------------------
+# build_index.py  – v2.1  (2025-06-04)
+# ------------------------------------------------------------
 """
-Index the Alpaca audio corpus into three JSON tables
-(raw, labelled 15-s clips, cropped hums) with rich metadata.
-For hum segments the script also caches a log-mel spectrogram (.npy).
+Improvements over v2.0
+----------------------
+1. Auto-fix “benchmark” filenames that violate the canonical scheme and
+   physically rename them on disk (with a warning).
+2. Add a `distribution` object to the JSON describing hum counts and
+   quality histograms per clip and per raw recording.
 
-If a labelled clip references a raw recording that you don’t possess,
-a *placeholder* Raw entry with type="raw_missing" is generated so that
-UID relationships stay intact and downstream code never breaks.
+The canonical scheme we enforce **after** renaming is:
+
+  labelled clip : <RAWFILE>.wav_<clipStart>_<clipEnd>.wav
+  hum segment   : <CLIPFILE>.wav_<humStart>_<humEnd>Q<q>.wav
+
+The script recognises and repairs the following malformed patterns that
+have appeared so far:
+
+  * 20250205_193000 2nd obs.wav              (no raw-stub, no start/end)
+  * 20250203_193000 05.23.wav                (spaces & dot)
+  * 388_20250204_193000.wav                  (animalId leading)
+  * <…>_h_q2.wav / _hw_q3.wav / …            (extra “h/hw/_w/ (tilted)”)
+
+If you hit another variant, the script will throw, telling you which file
+it couldn’t parse – then you can extend the REGEX table below.
 """
 
 from __future__ import annotations
-import json, re, math
+import argparse, json, re
 from pathlib import Path
-from dataclasses import dataclass, asdict
-from typing import Optional, Dict, List, Union
-import itertools
-import numpy as np
+from typing import Dict, List, Optional
+import itertools, statistics
 import soundfile as sf
-import librosa
+from datetime import datetime
 from tqdm.auto import tqdm
 
-# ---------------------------------------------------------------------
-# CONFIG – edit once, shared by the entire repo
-# ---------------------------------------------------------------------
+#  ────────────────────────────────────────────────────────────────
+#  0. Canonical regular expressions   (unchanged)
+#  ────────────────────────────────────────────────────────────────
+RAW_RE   = re.compile(r"^(?P<animal>\w+?)_(?P<date>\d{8})(?:_(?P<tag>[^_]+))?_cut\.wav$")
+CLIP_RE  = re.compile(r"^(?P<raw>.+?\.wav)_(?P<clip_start>\d+)_(?P<clip_end>\d+)\.wav$")
+HUM_RE   = re.compile(r"^(?P<clip>.+?\.wav)_(?P<h_start>\d+(?:\.\d+)?)_(?P<h_end>\d+(?:\.\d+)?)Q(?P<q>\d)\.wav$")
 
-SPEC_CFG = dict(
-    n_fft=2002,  # ← 41.7 ms @ 48 kHz
-    hop_length=1001,  # ← 50 % overlap
-    n_mels=64,  # keep or raise to 128 if you want finer detail
-    fmin=0,
-    fmax=4000,  # hums live below 4 kHz
-    power=2.0,
-)
-SAMPLE_RATE_TARGET = 48_000  # all hums will be resampled to this
-
-
-# ---------------------------------------------------------------------
-# dataclasses
-# ---------------------------------------------------------------------
-
-@dataclass
-class Base:
-    uid: int
-    type: str
-    path: str
-    animal_id: str
-    date: str
-    extra_tag: Optional[str]
-    duration_s: float
-    samplerate: int
-    channels: int
-    rms_db: Optional[float] = None
-    max_db: Optional[float] = None
-    snr_db: Optional[float] = None
-    dataset_split: Optional[str] = None
-    spec_path: Optional[str] = None
-    spec_png_path: Optional[str] = None
-    mask_path: Optional[str] = None
-    # frozen spectrogram params
-    n_fft: int = SPEC_CFG["n_fft"]
-    hop_length: int = SPEC_CFG["hop_length"]
-    n_mels: int = SPEC_CFG["n_mels"]
-    fmin: int = SPEC_CFG["fmin"]
-    fmax: int = SPEC_CFG["fmax"]
-
-
-@dataclass
-class Raw(Base):
-    pass
-
-
-@dataclass(kw_only=True)
-class Clip(Base):
-    raw_uid: int
-    clip_start_s: float
-    clip_end_s: float
-
-
-@dataclass(kw_only=True)
-class Hum(Base):
-    raw_uid: int
-    clip_uid: int
-    clip_start_s: float
-    clip_end_s: float
-    hum_start_s: float
-    hum_end_s: float
-    hum_start_rel_clip_s: float
-    hum_end_rel_clip_s: float
-    quality: int
-
-
-# ---------------------------------------------------------------------
-# regex patterns
-# ---------------------------------------------------------------------
-
-RAW_PAT = re.compile(
-    r"""^(?P<animal>\w+)_(?P<date>\d{8})(?:_(?P<tag>[^_]+))?_cut\.wav$""", re.VERBOSE
-)
-LABEL_PAT = re.compile(
-    r"""^(?P<orig>.+?\.wav)_(?P<clip_start>\d+)_(?P<clip_end>\d+)\.wav$""", re.VERBOSE
-)
-HUM_PAT = re.compile(
-    r"""^(?P<orig>.+?\.wav)_(?P<hum_start>\d+(?:\.\d+)?)_(?P<hum_end>\d+(?:\.\d+)?)Q(?P<q>\d)\.wav$""",
-    re.VERBOSE,
-)
-
-# ---------------------------------------------------------------------
-# helpers
-# ---------------------------------------------------------------------
-
-project_root = Path(__file__).resolve().parent.parent
-data_dir = project_root / "data"
-DIRS = {
-    "raw": data_dir / "raw_recordings",
-    "clips": data_dir / "labelled_recordings",
-    "hums": data_dir / "segmented_wav_onlyhums",
+#  ────────────────────────────────────────────────────────────────
+#  1. Malformed patterns that we know how to repair
+#  ────────────────────────────────────────────────────────────────
+#
+#  Design:  a dict {kind: (compiled_regex, normaliser_function)}
+#  The *normaliser* receives the match object plus Path, must return the
+#  *new* canonical filename **relative to the same directory**.
+MALFORMED_CLIP_PATTERNS = {
+    "date_time_only": (
+        re.compile(
+            r"""^(?:(?P<animal>[A-Za-z0-9]+)_)?       # optional animal
+                 (?P<date>\d{8})_(?P<time>\d{6})      # YYYYMMDD_HHMMSS
+                 (?:[ _](?P<note>.+?))?\.wav$         # optional note
+             """, re.VERBOSE),
+        ),
 }
-SPEC_CACHE = data_dir / "spec_cache"
-SPEC_CACHE.mkdir(exist_ok=True)
 
-_uid = itertools.count(1)
+def _normalise_clip(m: re.Match, path: Path) -> str:
+    """Convert malformed clip filename to canonical."""
+    animal = m.group("animal") or "UNKN"
+    date   = m.group("date")      # 20250205
+    time   = m.group("time")      # 193000
+    note   = (m.group("note") or "").strip().replace(" ", "_")
+    note   = f"_{note}" if note else ""
 
+    raw_stub  = f"{animal}_{date}{note}.wav"        # acts as RAW filename
+    # we don't know the start offset - assume 0
+    duration  = int(round(wav_duration(path)))      # clip length in seconds
+    new_name  = f"{raw_stub}_0_{duration}.wav"
+    return new_name
 
-def next_uid() -> int: return next(_uid)
+# register
+MALFORMED_CLIP_PATTERNS["date_time_only"] = (
+    MALFORMED_CLIP_PATTERNS["date_time_only"][0], _normalise_clip
+)
 
+# -----------------------------------------------------------------
+MALFORMED_HUM_PATTERNS = {
+    "hw_v1": (
+        re.compile(
+            r"""^(?P<clip>.+?\.wav)_
+                 (?P<h_start>\d+(?:\.\d+)?)_
+                 (?P<h_end>\d+(?:\.\d+)?)_
+                 (?:h|hw)                 # accept both flags
+                 _q(?P<q>\d)              # lowercase q
+                 (?:[ _]\w+|\s*\(.*\))?   # optional trailing junk
+                 \.wav$""",
+            re.VERBOSE | re.IGNORECASE),
+        ),
+}
 
-UID_RAW: Dict[str, int] = {}  # raw filename → uid
-UID_CLIP: Dict[str, int] = {}  # clip filename → uid
+def _normalise_hum(m: re.Match, path: Path, clip_map: Dict[str, str]) -> str:
+    """Convert malformed hum filename to canonical."""
+    old_clip = m.group("clip")
+    new_clip = clip_map.get(old_clip, old_clip)      # may have been renamed
+    h0       = m.group("h_start")
+    h1       = m.group("h_end")
+    q        = m.group("q")
+    new_name = f"{new_clip}_{h0}_{h1}Q{q}.wav"
+    return new_name
 
-RAWS, CLIPS, HUMS = [], [], []  # will be filled on the fly
+# register
+MALFORMED_HUM_PATTERNS["hw_v1"] = (
+    MALFORMED_HUM_PATTERNS["hw_v1"][0], _normalise_hum
+)
 
-
-def wav_header(path: Path):
+#  ────────────────────────────────────────────────────────────────
+#  2. Utilities
+#  ────────────────────────────────────────────────────────────────
+def wav_duration(path: Path) -> float:
+    """Seconds (metadata only, no full read)."""
     info = sf.info(path)
-    return info.frames / info.samplerate, info.samplerate, info.channels
+    return info.frames / info.samplerate
 
+def rename_with_warning(old: Path, new_name: str) -> str:
+    new = old.with_name(new_name)
+    if new.exists():
+        raise RuntimeError(f"Cannot rename {old.name} → {new_name}: target exists.")
+    old.rename(new)
+    print(f"WARNING: renamed   {old.name}  →  {new.name}")
+    return new.name
 
-def db_stats(y: np.ndarray):
-    rms = np.sqrt(np.mean(y ** 2))
-    peak = np.max(np.abs(y))
-    rms_db = 20 * math.log10(rms + 1e-12)
-    peak_db = 20 * math.log10(peak + 1e-12)
-    return rms_db, peak_db, peak_db - rms_db
+#  ────────────────────────────────────────────────────────────────
+#  3. Index builder (v2.0 + distributions + auto-repair)
+#  ────────────────────────────────────────────────────────────────
+def build_index(corpus_root: Path) -> None:
+    corpus_name = corpus_root.name
+    raw_dir  = (corpus_root / "raw_recordings")  if (corpus_root / "raw_recordings").exists() else None
+    clip_dir = _find_unique("labelled_recordings", corpus_root)
+    hum_dir  = _find_unique("segmented",          corpus_root)
 
+    # ---------- pass 0: repair filenames in place -----------------
+    clip_name_map = _repair_dir(clip_dir, MALFORMED_CLIP_PATTERNS, rename_with_warning)
+    # hum repair needs to know clip renames so we pass the map
+    _repair_dir(hum_dir, MALFORMED_HUM_PATTERNS,
+                lambda p, n: rename_with_warning(p, n),
+                extra_ctx={"clip_map": clip_name_map})
 
-def save_spec(y: np.ndarray, sr: int, uid: int) -> str:
-    if sr != SAMPLE_RATE_TARGET:
-        y = librosa.resample(y, orig_sr=sr, target_sr=SAMPLE_RATE_TARGET)
-        sr = SAMPLE_RATE_TARGET
-    S = librosa.feature.melspectrogram(
-        y=y, sr=sr, power=SPEC_CFG["power"],
-        **{k: SPEC_CFG[k] for k in ("n_fft", "hop_length", "n_mels", "fmin", "fmax")}
-    )
-    logS = librosa.power_to_db(S, ref=np.max).astype(np.float32)
-    out = SPEC_CACHE / f"{uid}.npy"
-    np.save(out, logS)
-    return str(out.relative_to(data_dir))
+    # ---------- pass 1: canonical indexing ------------------------
+    uid_counter = itertools.count(1)
+    raw_uid_map, clip_uid_map = {}, {}
+    entries: List[dict] = []
 
+    # raw UIDs
+    if raw_dir:
+        for wav in raw_dir.glob("*.wav"):
+            raw_uid_map[wav.name] = next(uid_counter)
 
-# -----  missing-raw helper  -------------------------------------------------
+    # clips
+    for wav in clip_dir.glob("*.wav"):
+        m = CLIP_RE.match(wav.name)
+        if not m:
+            raise ValueError(f"Unrecognised clip filename after repair: {wav.name}")
+        raw_fname  = m["raw"]
+        clip_uid   = next(uid_counter)
+        clip_uid_map[wav.name] = clip_uid
+        if raw_fname not in raw_uid_map:
+            raw_uid_map[raw_fname] = next(uid_counter)
 
-def ensure_raw_uid(raw_name: str) -> int:
-    """Return UID of raw file; create placeholder if raw not on disk."""
-    if raw_name in UID_RAW:
-        return UID_RAW[raw_name]
+    # hums
+    hum_durs, raw_durs = [], []
+    distr_clip: Dict[str, dict] = {}
+    distr_raw : Dict[str, dict] = {}
 
-    m = RAW_PAT.match(raw_name)
-    if m is None:
-        raise ValueError(f"Cannot infer metadata from raw filename: {raw_name}")
-    g = m.groupdict()
-    uid = next_uid()
-    placeholder = Raw(
-        uid=uid,
-        type="raw_missing",
-        path=f"MISSING/{raw_name}",
-        animal_id=g["animal"],
-        date=f"{g['date'][:4]}-{g['date'][4:6]}-{g['date'][6:]}",
-        extra_tag=g["tag"],
-        duration_s=float("nan"),
-        samplerate=-1,
-        channels=-1,
-    )
-    RAWS.append(placeholder)
-    UID_RAW[raw_name] = uid
-    return uid
+    for wav in hum_dir.glob("*.wav"):
+        m = HUM_RE.match(wav.name)
+        if not m:
+            raise ValueError(f"Unrecognised hum filename after repair: {wav.name}")
 
+        clip_fname = m["clip"]
+        if clip_fname not in clip_uid_map:
+            raise RuntimeError(f"HUM refers to unknown clip: {wav.name}")
 
-# ---------------------------------------------------------------------
-# parsers
-# ---------------------------------------------------------------------
+        clip_match = CLIP_RE.match(clip_fname)
+        raw_fname  = clip_match["raw"]
 
-def parse_raw(path: Path):
-    m = RAW_PAT.match(path.name)
-    if not m:
-        raise ValueError(path)
-    g = m.groupdict()
-    dur, sr, ch = wav_header(path)
-    uid = next_uid()
-    RAWS.append(
-        Raw(
-            uid=uid,
-            type="raw",
-            path=str(path.relative_to(data_dir)),
-            animal_id=g["animal"],
-            date=f"{g['date'][:4]}-{g['date'][4:6]}-{g['date'][6:]}",
-            extra_tag=g["tag"],
-            duration_s=dur,
-            samplerate=sr,
-            channels=ch,
+        # UID look-ups
+        clip_uid = clip_uid_map[clip_fname]
+        raw_uid  = raw_uid_map[raw_fname]
+
+        # timings
+        h_start_c = float(m["h_start"]); h_end_c = float(m["h_end"])
+        c0 = float(clip_match["clip_start"])
+        h_start_r = c0 + h_start_c; h_end_r = c0 + h_end_c
+        dur = h_end_c - h_start_c
+        hq  = int(m["q"])
+        hum_durs.append(dur)
+
+        entry = dict(
+            uid           = next(uid_counter),
+            corpus_name   = corpus_name,
+            hum_path      = str(wav.relative_to(corpus_root)),
+            clip_path     = str( (clip_dir / clip_fname).relative_to(corpus_root) ),
+            raw_path      = str( (raw_dir / raw_fname).relative_to(corpus_root) )
+                            if raw_dir and (raw_dir / raw_fname).exists() else None,
+            quality       = hq,
+            dur_s         = round(dur, 4),
+            clip_start_s  = round(h_start_c, 3),
+            clip_end_s    = round(h_end_c,   3),
+            raw_start_s   = round(h_start_r, 3),
+            raw_end_s     = round(h_end_r,   3),
+            clip_uid      = clip_uid,
+            raw_uid       = raw_uid,
         )
-    )
-    UID_RAW[path.name] = uid
+        entries.append(entry)
 
+        # ---- distribution tallies --------------------------------
+        _bump(distr_clip, clip_uid, hq)
+        _bump(distr_raw,  raw_uid,  hq)
 
-def parse_clip(path: Path):
-    m = LABEL_PAT.match(path.name)
-    if not m:
-        raise ValueError(path)
-    g = m.groupdict()
-    raw_name = g["orig"]
-    raw_uid = ensure_raw_uid(raw_name)  # <-- placeholder if needed
-    raw_g = RAW_PAT.match(raw_name).groupdict()
-
-    dur, sr, ch = wav_header(path)
-    uid = next_uid()
-    CLIPS.append(
-        Clip(
-            uid=uid,
-            type="labelled_clip",
-            path=str(path.relative_to(data_dir)),
-            animal_id=raw_g["animal"],
-            date=f"{raw_g['date'][:4]}-{raw_g['date'][4:6]}-{raw_g['date'][6:]}",
-            extra_tag=raw_g["tag"],
-            duration_s=dur,
-            samplerate=sr,
-            channels=ch,
-            raw_uid=raw_uid,
-            clip_start_s=float(g["clip_start"]),
-            clip_end_s=float(g["clip_end"]),
-        )
-    )
-    UID_CLIP[path.name] = uid
-
-
-def parse_hum(path: Path):
-    m = HUM_PAT.match(path.name)
-    if not m:
-        raise ValueError(path)
-    g = m.groupdict()
-    clip_name = g["orig"]
-    if clip_name not in UID_CLIP:
-        # clip not yet seen (can happen if clips folder missing) – create stub
-        parse_clip(DIRS["clips"] / clip_name)
-
-    clip_uid = UID_CLIP[clip_name]
-    clip_g = LABEL_PAT.match(clip_name).groupdict()
-    raw_name = clip_g["orig"]
-    raw_uid = ensure_raw_uid(raw_name)
-    raw_g = RAW_PAT.match(raw_name).groupdict()
-
-    y, sr = sf.read(path)
-    rms_db, max_db, snr_db = db_stats(y)
-    uid = next_uid()
-    spec_rel = save_spec(y, sr, uid)
-
-    # parse absolute times
-    h0 = float(g["hum_start"])
-    h1 = float(g["hum_end"])
-    c0 = float(clip_g["clip_start"])
-    c1 = float(clip_g["clip_end"])
-
-    # only compute a clip‐relative offset if the hum really sits inside the clip
-    inside = (h0 >= c0) and (h1 <= c1)
-    start_rel = (h0 - c0) if inside else None
-    end_rel = (h1 - c0) if inside else None
-
-    HUMS.append(
-        Hum(
-            uid=uid,
-            type="hum_segment",
-            path=str(path.relative_to(data_dir)),
-            animal_id=raw_g["animal"],
-            date=f"{raw_g['date'][:4]}-{raw_g['date'][4:6]}-{raw_g['date'][6:]}",
-            extra_tag=raw_g["tag"],
-            duration_s=len(y) / sr,
-            samplerate=sr,
-            channels=1 if y.ndim == 1 else y.shape[1],
-            rms_db=rms_db,
-            max_db=max_db,
-            snr_db=snr_db,
-            spec_path=spec_rel,
-            raw_uid=raw_uid,
-            clip_uid=clip_uid,
-            clip_start_s=float(clip_g["clip_start"]),
-            clip_end_s=float(clip_g["clip_end"]),
-            hum_start_s=h0,
-            hum_end_s=h1,
-            hum_start_rel_clip_s=start_rel,
-            hum_end_rel_clip_s=end_rel,
-            quality=int(g["q"]),
-        )
+    # corpus-level meta
+    if raw_dir:
+        raw_durs = [wav_duration(w) for w in raw_dir.glob("*.wav")]
+    meta = dict(
+        corpus_name        = corpus_name,
+        n_raw_recordings   = len(raw_uid_map),
+        n_labelled_clips   = len(clip_uid_map),
+        n_hums             = len(entries),
+        avg_raw_duration_h = round(statistics.mean(raw_durs)/3600, 3) if raw_durs else None,
+        avg_hum_duration_s = round(statistics.mean(hum_durs), 3) if hum_durs else 0.0,
+        clip_duration_s    = 900,   # protocol default
+        generated_at       = datetime.utcnow().isoformat(timespec="seconds") + "Z",
     )
 
+    distribution = dict(
+        per_clip = distr_clip,
+        per_raw  = distr_raw,
+    )
 
-# ---------------------------------------------------------------------
-# build index
-# ---------------------------------------------------------------------
+    out_path = corpus_root / "corpus_index.json"
+    with out_path.open("w", encoding="utf-8") as fh:
+        json.dump({"meta": meta,
+                   "distribution": distribution,
+                   "entries": entries}, fh, indent=2)
+    print(f"\n✅  wrote {out_path.relative_to(Path.cwd())}  "
+          f"({len(entries)} hums • {len(clip_uid_map)} clips • {len(raw_uid_map)} raws)\n")
 
-def build():
-    for p in tqdm(sorted(DIRS["raw"].glob("*.wav")), desc="raw"):
-        parse_raw(p)
-    for p in tqdm(sorted(DIRS["clips"].glob("*.wav")), desc="clips"):
-        parse_clip(p)
-    for p in tqdm(sorted(DIRS["hums"].glob("*.wav")), desc="hums"):
-        parse_hum(p)
+#  ────────────────────────────────────────────────────────────────
+#  4. Support functions used above
+#  ────────────────────────────────────────────────────────────────
+def _find_unique(sub: str, root: Path) -> Path:
+    matches = [p for p in root.iterdir() if p.is_dir() and sub.lower() in p.name.lower()]
+    if not matches:
+        raise FileNotFoundError(f"No directory containing '{sub}' found in {root}")
+    if len(matches) > 1:
+        raise RuntimeError(f"Ambiguous directories for '{sub}' under {root}: {matches}")
+    return matches[0]
 
-    out_map = [
-        ("index_raw.json", RAWS),
-        ("index_clips.json", CLIPS),
-        ("index_hums.json", HUMS),
-    ]
-    for fname, lst in out_map:
-        with open(data_dir / fname, "w", encoding="utf-8") as fh:
-            json.dump([asdict(e) for e in lst], fh, indent=2)
-        print(f"Wrote {fname}  ({len(lst)} entries)")
+def _repair_dir(dir_path: Path,
+                pattern_table: Dict[str, tuple],
+                renamer,
+                extra_ctx: Optional[dict] = None) -> Dict[str, str]:
+    """
+    Walk *dir_path* and rename files that match any malformed pattern.
+    Returns {old_name: new_name} for *clip* repairs (so hums can reference).
+    """
+    name_map = {}
+    extra_ctx = extra_ctx or {}
+    for wav in dir_path.glob("*.wav"):
+        if CLIP_RE.match(wav.name) or HUM_RE.match(wav.name):
+            continue  # already fine
 
+        repaired = False
+        for key, (regex, normaliser) in pattern_table.items():
+            m = regex.match(wav.name)
+            if m:
+                if "clip_map" in extra_ctx:
+                    new_name = normaliser(m, wav, extra_ctx["clip_map"])
+                else:
+                    new_name = normaliser(m, wav)
+                old = wav.name
+                new = rename_with_warning(wav, new_name)
+                name_map[old] = new
+                repaired = True
+                break
+        if not repaired:
+            raise ValueError(f"❌  Cannot parse filename: {wav}")
+    return name_map
 
+def _bump(d: Dict[str, dict], key: str, q: int):
+    """Increment hum counters inside the distribution dict."""
+    bucket = d.setdefault(str(key), {"n_hums": 0, "qualities": {}})
+    bucket["n_hums"] += 1
+    bucket["qualities"][str(q)] = bucket["qualities"].get(str(q), 0) + 1
+
+#  ────────────────────────────────────────────────────────────────
+#  5. CLI entry-point
+#  ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    build()
+    ap = argparse.ArgumentParser(description="Build or rebuild the hum-level JSON index for one Alpaca corpus.")
+    ap.add_argument("corpus_root", type=Path,
+                    help="Path to corpus folder (e.g. data/benchmark_corpus_v1)")
+    args = ap.parse_args()
+    build_index(args.corpus_root.resolve())
