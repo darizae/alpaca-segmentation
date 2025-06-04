@@ -1,0 +1,4 @@
+training_split_00_random:
+- Pure segmented wav only hums as positives
+- Negatives are mined by randomly picking non-overlapping time in raw recordings (-> change to relative to 15 min clips)
+- Positives are blind to different file sources and qualities -> imbalanced, unweighted
