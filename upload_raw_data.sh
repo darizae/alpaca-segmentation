@@ -11,7 +11,7 @@ REMOTE_USER="u17184"
 REMOTE_HOST="glogin-gpu.hpc.gwdg.de"
 
 # Fixed remote target base directory (no trailing /)
-REMOTE_TARGET_BASE="/user.d.arizaecheverri/u17184/.project/dir.project/alpaca-segmentation/data"
+REMOTE_TARGET_BASE="~/.project/dir.project/alpaca-segmentation/data"
 
 # Argument: local directory to upload
 LOCAL_DIR="${1:-}"
