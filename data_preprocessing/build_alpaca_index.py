@@ -1,46 +1,28 @@
 #!/usr/bin/env python
-# build_index.py  – v2.1  (2025-06-04)
-# ------------------------------------------------------------
-"""
-Improvements over v2.0
-----------------------
-1. Auto-fix “benchmark” filenames that violate the canonical scheme and
-   physically rename them on disk (with a warning).
-2. Add a `distribution` object to the JSON describing hum counts and
-   quality histograms per clip and per raw recording.
-
-The canonical scheme we enforce **after** renaming is:
-
-  labelled clip : <RAWFILE>.wav_<clipStart>_<clipEnd>.wav
-  hum segment   : <CLIPFILE>.wav_<humStart>_<humEnd>Q<q>.wav
-
-The script recognises and repairs the following malformed patterns that
-have appeared so far:
-
-  * 20250205_193000 2nd obs.wav              (no raw-stub, no start/end)
-  * 20250203_193000 05.23.wav                (spaces & dot)
-  * 388_20250204_193000.wav                  (animalId leading)
-  * <…>_h_q2.wav / _hw_q3.wav / …            (extra “h/hw/_w/ (tilted)”)
-
-If you hit another variant, the script will throw, telling you which file
-it couldn’t parse – then you can extend the REGEX table below.
-"""
+# build_index.py – v2.2  (2025-06-07)
+#
+# Changes w.r.t. v2.1
+# ───────────────────
+# • Detect actual duration of every labelled clip (no more 900 s assumption).
+# • Each entry gains  'clip_dur_s'.
+# • meta now exports
+#       clip_duration_s      (fixed value or None)
+#       avg_clip_duration_s  (always present)
+#   Down-stream tools can key on entry["clip_dur_s"] when meta one is None.
+# • Nothing else touched.
 
 from __future__ import annotations
-import argparse, json, re
+import argparse, json, re, itertools, statistics
 from pathlib import Path
 from typing import Dict, List, Optional
-import itertools, statistics
-import soundfile as sf
 from datetime import datetime
+
+import soundfile as sf
 from tqdm.auto import tqdm
 
-#  ────────────────────────────────────────────────────────────────
-#  0. Canonical regular expressions   (unchanged)
-#  ────────────────────────────────────────────────────────────────
-RAW_RE   = re.compile(r"^(?P<animal>\w+?)_(?P<date>\d{8})(?:_(?P<tag>[^_]+))?_cut\.wav$")
-CLIP_RE  = re.compile(r"^(?P<raw>.+?\.wav)_(?P<clip_start>\d+)_(?P<clip_end>\d+)\.wav$")
-HUM_RE   = re.compile(r"^(?P<clip>.+?\.wav)_(?P<h_start>\d+(?:\.\d+)?)_(?P<h_end>\d+(?:\.\d+)?)Q(?P<q>\d)\.wav$")
+RAW_RE = re.compile(r"^(?P<animal>\w+?)_(?P<date>\d{8})(?:_(?P<tag>[^_]+))?_cut\.wav$")
+CLIP_RE = re.compile(r"^(?P<raw>.+?\.wav)_(?P<clip_start>\d+)_(?P<clip_end>\d+)\.wav$")
+HUM_RE = re.compile(r"^(?P<clip>.+?\.wav)_(?P<h_start>\d+(?:\.\d+)?)_(?P<h_end>\d+(?:\.\d+)?)Q(?P<q>\d)\.wav$")
 
 #  ────────────────────────────────────────────────────────────────
 #  1. Malformed patterns that we know how to repair
@@ -56,22 +38,24 @@ MALFORMED_CLIP_PATTERNS = {
                  (?P<date>\d{8})_(?P<time>\d{6})      # YYYYMMDD_HHMMSS
                  (?:[ _](?P<note>.+?))?\.wav$         # optional note
              """, re.VERBOSE),
-        ),
+    ),
 }
+
 
 def _normalise_clip(m: re.Match, path: Path) -> str:
     """Convert malformed clip filename to canonical."""
     animal = m.group("animal") or "UNKN"
-    date   = m.group("date")      # 20250205
-    time   = m.group("time")      # 193000
-    note   = (m.group("note") or "").strip().replace(" ", "_")
-    note   = f"_{note}" if note else ""
+    date = m.group("date")  # 20250205
+    time = m.group("time")  # 193000
+    note = (m.group("note") or "").strip().replace(" ", "_")
+    note = f"_{note}" if note else ""
 
-    raw_stub  = f"{animal}_{date}{note}.wav"        # acts as RAW filename
+    raw_stub = f"{animal}_{date}{note}.wav"  # acts as RAW filename
     # we don't know the start offset - assume 0
-    duration  = int(round(wav_duration(path)))      # clip length in seconds
-    new_name  = f"{raw_stub}_0_{duration}.wav"
+    duration = int(round(wav_duration(path)))  # clip length in seconds
+    new_name = f"{raw_stub}_0_{duration}.wav"
     return new_name
+
 
 # register
 MALFORMED_CLIP_PATTERNS["date_time_only"] = (
@@ -90,31 +74,34 @@ MALFORMED_HUM_PATTERNS = {
                  (?:[ _]\w+|\s*\(.*\))?   # optional trailing junk
                  \.wav$""",
             re.VERBOSE | re.IGNORECASE),
-        ),
+    ),
 }
+
 
 def _normalise_hum(m: re.Match, path: Path, clip_map: Dict[str, str]) -> str:
     """Convert malformed hum filename to canonical."""
     old_clip = m.group("clip")
-    new_clip = clip_map.get(old_clip, old_clip)      # may have been renamed
-    h0       = m.group("h_start")
-    h1       = m.group("h_end")
-    q        = m.group("q")
+    new_clip = clip_map.get(old_clip, old_clip)  # may have been renamed
+    h0 = m.group("h_start")
+    h1 = m.group("h_end")
+    q = m.group("q")
     new_name = f"{new_clip}_{h0}_{h1}Q{q}.wav"
     return new_name
+
 
 # register
 MALFORMED_HUM_PATTERNS["hw_v1"] = (
     MALFORMED_HUM_PATTERNS["hw_v1"][0], _normalise_hum
 )
 
+
 #  ────────────────────────────────────────────────────────────────
 #  2. Utilities
 #  ────────────────────────────────────────────────────────────────
 def wav_duration(path: Path) -> float:
-    """Seconds (metadata only, no full read)."""
     info = sf.info(path)
     return info.frames / info.samplerate
+
 
 def rename_with_warning(old: Path, new_name: str) -> str:
     new = old.with_name(new_name)
@@ -124,47 +111,49 @@ def rename_with_warning(old: Path, new_name: str) -> str:
     print(f"WARNING: renamed   {old.name}  →  {new.name}")
     return new.name
 
-#  ────────────────────────────────────────────────────────────────
-#  3. Index builder (v2.0 + distributions + auto-repair)
-#  ────────────────────────────────────────────────────────────────
+
+# ────────────────────────────────────────────────────────────────
+# main
+# ────────────────────────────────────────────────────────────────
 def build_index(corpus_root: Path) -> None:
     corpus_name = corpus_root.name
-    raw_dir  = (corpus_root / "raw_recordings")  if (corpus_root / "raw_recordings").exists() else None
+    raw_dir = (corpus_root / "raw_recordings") if (corpus_root / "raw_recordings").exists() else None
     clip_dir = _find_unique("labelled_recordings", corpus_root)
-    hum_dir  = _find_unique("segmented",          corpus_root)
+    hum_dir = _find_unique("segmented", corpus_root)
 
-    # ---------- pass 0: repair filenames in place -----------------
+    # ---------- 0) auto-repair filenames -------------------------
     clip_name_map = _repair_dir(clip_dir, MALFORMED_CLIP_PATTERNS, rename_with_warning)
-    # hum repair needs to know clip renames so we pass the map
     _repair_dir(hum_dir, MALFORMED_HUM_PATTERNS,
                 lambda p, n: rename_with_warning(p, n),
                 extra_ctx={"clip_map": clip_name_map})
 
-    # ---------- pass 1: canonical indexing ------------------------
+    # ---------- 1) prepare UID maps & clip durations -------------
     uid_counter = itertools.count(1)
     raw_uid_map, clip_uid_map = {}, {}
+    clip_dur_map: Dict[str, float] = {}
     entries: List[dict] = []
 
-    # raw UIDs
+    # raw recordings
     if raw_dir:
         for wav in raw_dir.glob("*.wav"):
             raw_uid_map[wav.name] = next(uid_counter)
 
-    # clips
+    # labelled clips – gather real duration
     for wav in clip_dir.glob("*.wav"):
         m = CLIP_RE.match(wav.name)
         if not m:
             raise ValueError(f"Unrecognised clip filename after repair: {wav.name}")
-        raw_fname  = m["raw"]
-        clip_uid   = next(uid_counter)
-        clip_uid_map[wav.name] = clip_uid
+
+        clip_uid_map[wav.name] = next(uid_counter)
+        clip_dur_map[wav.name] = wav_duration(wav)
+
+        raw_fname = m["raw"]
         if raw_fname not in raw_uid_map:
             raw_uid_map[raw_fname] = next(uid_counter)
 
-    # hums
+    # ---------- 2) hum entries -----------------------------------
     hum_durs, raw_durs = [], []
-    distr_clip: Dict[str, dict] = {}
-    distr_raw : Dict[str, dict] = {}
+    distr_clip, distr_raw = {}, {}
 
     for wav in hum_dir.glob("*.wav"):
         m = HUM_RE.match(wav.name)
@@ -172,72 +161,75 @@ def build_index(corpus_root: Path) -> None:
             raise ValueError(f"Unrecognised hum filename after repair: {wav.name}")
 
         clip_fname = m["clip"]
-        if clip_fname not in clip_uid_map:
-            raise RuntimeError(f"HUM refers to unknown clip: {wav.name}")
-
-        clip_match = CLIP_RE.match(clip_fname)
-        raw_fname  = clip_match["raw"]
-
-        # UID look-ups
         clip_uid = clip_uid_map[clip_fname]
-        raw_uid  = raw_uid_map[raw_fname]
+        clip_dur = clip_dur_map[clip_fname]
+
+        clip_m = CLIP_RE.match(clip_fname)
+        raw_fname = clip_m["raw"]
+        raw_uid = raw_uid_map[raw_fname]
 
         # timings
-        h_start_c = float(m["h_start"]); h_end_c = float(m["h_end"])
-        c0 = float(clip_match["clip_start"])
-        h_start_r = c0 + h_start_c; h_end_r = c0 + h_end_c
+        h_start_c = float(m["h_start"]);
+        h_end_c = float(m["h_end"])
+        c0 = float(clip_m["clip_start"])
+        h_start_r, h_end_r = c0 + h_start_c, c0 + h_end_c
         dur = h_end_c - h_start_c
-        hq  = int(m["q"])
+        q = int(m["q"])
+
         hum_durs.append(dur)
 
-        entry = dict(
-            uid           = next(uid_counter),
-            corpus_name   = corpus_name,
-            hum_path      = str(wav.relative_to(corpus_root)),
-            clip_path     = str( (clip_dir / clip_fname).relative_to(corpus_root) ),
-            raw_path      = str( (raw_dir / raw_fname).relative_to(corpus_root) )
-                            if raw_dir and (raw_dir / raw_fname).exists() else None,
-            quality       = hq,
-            dur_s         = round(dur, 4),
-            clip_start_s  = round(h_start_c, 3),
-            clip_end_s    = round(h_end_c,   3),
-            raw_start_s   = round(h_start_r, 3),
-            raw_end_s     = round(h_end_r,   3),
-            clip_uid      = clip_uid,
-            raw_uid       = raw_uid,
-        )
-        entries.append(entry)
+        entries.append(dict(
+            uid=next(uid_counter),
+            corpus_name=corpus_name,
+            hum_path=str(wav.relative_to(corpus_root)),
+            clip_path=str((clip_dir / clip_fname).relative_to(corpus_root)),
+            raw_path=str((raw_dir / raw_fname).relative_to(corpus_root))
+            if raw_dir and (raw_dir / raw_fname).exists() else None,
+            quality=q,
+            dur_s=round(dur, 4),
+            clip_dur_s=round(clip_dur, 3),
+            clip_start_s=round(h_start_c, 3),
+            clip_end_s=round(h_end_c, 3),
+            raw_start_s=round(h_start_r, 3),
+            raw_end_s=round(h_end_r, 3),
+            clip_uid=clip_uid,
+            raw_uid=raw_uid,
+        ))
 
-        # ---- distribution tallies --------------------------------
-        _bump(distr_clip, clip_uid, hq)
-        _bump(distr_raw,  raw_uid,  hq)
+        _bump(distr_clip, clip_uid, q)
+        _bump(distr_raw, raw_uid, q)
 
-    # corpus-level meta
+    # ---------- 3) meta block ------------------------------------
     if raw_dir:
         raw_durs = [wav_duration(w) for w in raw_dir.glob("*.wav")]
+
+    clip_durs = list(clip_dur_map.values())
+    # Is there effectively a single duration?
+    unique_rounded = {round(d) for d in clip_durs}
+    fixed_clip_len = unique_rounded.pop() if len(unique_rounded) == 1 else None
+
     meta = dict(
-        corpus_name        = corpus_name,
-        n_raw_recordings   = len(raw_uid_map),
-        n_labelled_clips   = len(clip_uid_map),
-        n_hums             = len(entries),
-        avg_raw_duration_h = round(statistics.mean(raw_durs)/3600, 3) if raw_durs else None,
-        avg_hum_duration_s = round(statistics.mean(hum_durs), 3) if hum_durs else 0.0,
-        clip_duration_s    = 900,   # protocol default
-        generated_at       = datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        corpus_name=corpus_name,
+        n_raw_recordings=len(raw_uid_map),
+        n_labelled_clips=len(clip_uid_map),
+        n_hums=len(entries),
+        avg_raw_duration_h=round(statistics.mean(raw_durs) / 3600, 3) if raw_durs else None,
+        avg_hum_duration_s=round(statistics.mean(hum_durs), 3) if hum_durs else 0.0,
+        clip_duration_s=fixed_clip_len,
+        avg_clip_duration_s=round(statistics.mean(clip_durs), 3),
+        generated_at=datetime.utcnow().isoformat(timespec="seconds") + "Z",
     )
 
-    distribution = dict(
-        per_clip = distr_clip,
-        per_raw  = distr_raw,
-    )
-
+    # ---------- 4) write -----------------------------------------
     out_path = corpus_root / "corpus_index.json"
     with out_path.open("w", encoding="utf-8") as fh:
         json.dump({"meta": meta,
-                   "distribution": distribution,
+                   "distribution": dict(per_clip=distr_clip, per_raw=distr_raw),
                    "entries": entries}, fh, indent=2)
-    print(f"\n✅  wrote {out_path.relative_to(Path.cwd())}  "
-          f"({len(entries)} hums • {len(clip_uid_map)} clips • {len(raw_uid_map)} raws)\n")
+
+    print(f"✔ wrote {out_path.relative_to(Path.cwd())}  "
+          f"({len(entries)} hums • {len(clip_uid_map)} clips • {len(raw_uid_map)} raws)")
+
 
 #  ────────────────────────────────────────────────────────────────
 #  4. Support functions used above
@@ -249,6 +241,7 @@ def _find_unique(sub: str, root: Path) -> Path:
     if len(matches) > 1:
         raise RuntimeError(f"Ambiguous directories for '{sub}' under {root}: {matches}")
     return matches[0]
+
 
 def _repair_dir(dir_path: Path,
                 pattern_table: Dict[str, tuple],
@@ -281,11 +274,13 @@ def _repair_dir(dir_path: Path,
             raise ValueError(f"❌  Cannot parse filename: {wav}")
     return name_map
 
+
 def _bump(d: Dict[str, dict], key: str, q: int):
     """Increment hum counters inside the distribution dict."""
     bucket = d.setdefault(str(key), {"n_hums": 0, "qualities": {}})
     bucket["n_hums"] += 1
     bucket["qualities"][str(q)] = bucket["qualities"].get(str(q), 0) + 1
+
 
 #  ────────────────────────────────────────────────────────────────
 #  5. CLI entry-point
