@@ -63,6 +63,7 @@ import pandas as pd
 from scipy.stats import pearsonr, spearmanr
 from tqdm import tqdm
 
+
 ###############################################################################
 # Helpers
 ###############################################################################
@@ -151,6 +152,7 @@ def boundary_errors(pairs, gt, pr):
 def per_tape_counts(df: pd.DataFrame) -> pd.Series:
     return df.groupby("tape").size()
 
+
 ###############################################################################
 # Evaluation of single variant
 ###############################################################################
@@ -174,10 +176,19 @@ def eval_variant(gt_df: pd.DataFrame, pred_idx: Path, iou: float) -> Dict:
     pear = pearsonr(ct_gt, ct_pr)[0] if len(ct_gt) > 1 else np.nan
     spear = spearmanr(ct_gt, ct_pr)[0] if len(ct_gt) > 1 else np.nan
 
-    # Q1-only recall
-    gt_q1 = gt_df[gt_df.quality == 1]
-    pairs_q1 = [p for p in pairs if gt_s.at[p[0], "quality"] == 1]
-    rec_q1 = len(pairs_q1) / len(gt_q1) if len(gt_q1) else np.nan
+    # Quality-specific recall and F1 (Q1 to Q4)
+    metrics_q = {}
+    for q in range(1, 5):
+        gt_q = gt_df[gt_df.quality == q]
+        pairs_q = [p for p in pairs if gt_s.at[p[0], "quality"] == q]
+        tp_q = len(pairs_q)
+        fn_q = len(gt_q) - tp_q
+        fp_q = sum(gt_s.at[p[0], "quality"] != q for p in pairs)  # overmatching penalty
+        rec_q = tp_q / len(gt_q) if len(gt_q) else np.nan
+        prec_q = tp_q / (tp_q + fp_q) if (tp_q + fp_q) else np.nan
+        f1_q = 2 * prec_q * rec_q / (prec_q + rec_q) if (prec_q + rec_q) else np.nan
+        metrics_q[f"recall_q{q}"] = rec_q
+        metrics_q[f"f1_q{q}"] = f1_q
 
     return {
         "n_gt": len(gt_df),
@@ -192,7 +203,7 @@ def eval_variant(gt_df: pd.DataFrame, pred_idx: Path, iou: float) -> Dict:
         "mean_dend_ms": dend_ms,
         "pearson_calls": pear,
         "spearman_calls": spear,
-        "recall_q1": rec_q1,
+        **metrics_q,
     }
 
 ###############################################################################
