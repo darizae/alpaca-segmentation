@@ -1,6 +1,8 @@
 # Ignore all folders in data/
 data/
 
+BENCHMARK/
+
 # Ignore all .zip files in data/
 data/*.zip
 
