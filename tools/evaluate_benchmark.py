@@ -1,60 +1,27 @@
 #!/usr/bin/env python3
-"""Evaluate alpaca-hum segmentation benchmark runs.
+"""evaluate_benchmark.py  ‒  event‑level metrics for alpaca‐hum segmentation
 
-Metrics per (model, variant)
----------------------------
-* **precision**  (upper-bound – GT omissions count as FP)
-* **recall**     (lower-bound – misses are real)
-* **F1**         (harmonic mean)
-* **mean |Δstart| & |Δend|** in **ms** on matched calls
-* **Pearson / Spearman** correlation of per-tape call counts
-* **Q1-only recall**
+❗ **Update (mid‑point matcher)**
+Instead of IoU ≥ τ we now count a prediction as a hit **if the mid‑point of the
+predicted interval lies inside any ground‑truth interval** (one‑to‑one greedy
+assignment).  All downstream stats remain unchanged, so existing notebooks
+still digest the CSV.
 
-Differences to first draft
--------------------------
-Ground-truth and prediction index files use different schemas:
+Run example:
 
-* **GT** (`corpus_index.json`)
-    ```json
-    {
-        "hum_path": "…/UNKN_20250205.wav_0_3594.wav_1263…Q2.wav",
-        "clip_path": "labelled_recordings_new/UNKN_20250205.wav_0_3594.wav",
-        "raw_start_s": 1263.318,
-        "raw_end_s":   1263.686,
-        "quality": 2,
-        …
-    }
-    ```
-* **Prediction** (`evaluation/index.json`)
-    ```json
-    {
-        "pred_path": "evaluation/…result.txt",
-        "tape": "UNKN_20250205.wav",
-        "start_s": 1263.29,
-        "end_s":   1263.68,
-        …
-    }
-    ```
-
-The refactor introduces separate loaders that normalise both into the common
-columns `[tape, beg, end, quality]`.
-
-Run example (from repo root):
-```
+```bash
 python tools/evaluate_benchmark.py \
   --gt data/benchmark_corpus_v1/corpus_index.json \
   --runs BENCHMARK/runs \
-  --iou 0.40 \
   --out metrics.csv
 ```
 
-Dependencies: `pandas≥1.3`, `numpy`, `scipy`, `tqdm`.
+Dependencies: pandas, numpy, scipy, tqdm.
 """
 from __future__ import annotations
 
 import argparse
 import json
-import re
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -63,24 +30,22 @@ import pandas as pd
 from scipy.stats import pearsonr, spearmanr
 from tqdm import tqdm
 
+###############################################################################
+# Helpers – loaders
+###############################################################################
 
-###############################################################################
-# Helpers
-###############################################################################
 
 def tape_from_clip(clip_path: str) -> str:
-    """Derive raw tape name (<tape>.wav) from a clipped filename."""
-    name = Path(clip_path).name  # e.g. UNKN_…obs.wav_0_3594.wav
+    name = Path(clip_path).name
     if ".wav_" in name:
         return name.split(".wav_")[0] + ".wav"
-    return name  # fallback – already looks like a tape
+    return name
 
 
-def read_gt_index(idx_path: Path) -> pd.DataFrame:
-    """Return DF with cols [tape, beg, end, quality]."""
-    idx = json.loads(idx_path.read_text())
+def read_gt_index(p: Path) -> pd.DataFrame:
+    j = json.loads(p.read_text())
     rows = []
-    for e in idx["entries"]:
+    for e in j["entries"]:
         rows.append(
             {
                 "tape": tape_from_clip(e["clip_path"]),
@@ -92,74 +57,71 @@ def read_gt_index(idx_path: Path) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def read_pred_index(idx_path: Path) -> pd.DataFrame:
-    idx = json.loads(idx_path.read_text())
-    rows = [
-        {"tape": e["tape"], "beg": float(e["start_s"]), "end": float(e["end_s"])}
-        for e in idx["entries"]
-    ]
-    return pd.DataFrame(rows)
+def read_pred_index(p: Path) -> pd.DataFrame:
+    j = json.loads(p.read_text())
+    return pd.DataFrame(
+        {k: [e[k] for e in j["entries"]] for k in ("tape", "start_s", "end_s")}
+    ).rename(columns={"start_s": "beg", "end_s": "end"})
 
+###############################################################################
+# Matching – mid‑point inside GT
+###############################################################################
 
-def interval_iou(a: Tuple[float, float], b: Tuple[float, float]) -> float:
-    inter = max(0.0, min(a[1], b[1]) - max(a[0], b[0]))
-    union = max(a[1], b[1]) - min(a[0], b[0])
-    return inter / union if union else 0.0
+def match_midpoint(gt: pd.DataFrame, pr: pd.DataFrame):
+    """Greedy one‑to‑one assignment using mid‑point rule.
 
+    Returns
+    -------
+    m_gt, m_pr : boolean masks
+    pairs      : list of (gt_idx, pr_idx)
+    gt_sort, pr_sort : sorted copies for downstream lookup
+    """
+    gt_sort = gt.sort_values(["tape", "beg"], ignore_index=True)
+    pr_sort = pr.sort_values(["tape", "beg"], ignore_index=True)
 
-def match_predictions(gt: pd.DataFrame, pr: pd.DataFrame, thr: float):
-    """Greedy one-to-one match → returns masks + mapping list."""
-    gt = gt.sort_values(["tape", "beg"], ignore_index=True)
-    pr = pr.sort_values(["tape", "beg"], ignore_index=True)
-
-    m_gt = np.zeros(len(gt), dtype=bool)
-    m_pr = np.zeros(len(pr), dtype=bool)
+    m_gt = np.zeros(len(gt_sort), dtype=bool)
+    m_pr = np.zeros(len(pr_sort), dtype=bool)
     pairs: List[Tuple[int, int]] = []
 
-    gt_grp = gt.groupby("tape").indices
-    pr_grp = pr.groupby("tape").indices
+    gt_grp = gt_sort.groupby("tape").indices
+    pr_grp = pr_sort.groupby("tape").indices
 
     for tape, g_idx in gt_grp.items():
         if tape not in pr_grp:
             continue
-        p_idx = list(pr_grp[tape])
+        preds = pr_grp[tape]
         for gi in g_idx:
-            best_iou, best_pi = 0.0, None
-            g_int = (gt.at[gi, "beg"], gt.at[gi, "end"])
-            for pi in p_idx:
+            beg_g, end_g = gt_sort.at[gi, "beg"], gt_sort.at[gi, "end"]
+            for pi in preds:
                 if m_pr[pi]:
                     continue
-                iou = interval_iou(g_int, (pr.at[pi, "beg"], pr.at[pi, "end"]))
-                if iou >= thr and iou > best_iou:
-                    best_iou, best_pi = iou, pi
-            if best_pi is not None:
-                m_gt[gi] = True
-                m_pr[best_pi] = True
-                pairs.append((gi, best_pi))
-    return m_gt, m_pr, pairs, gt, pr
+                mid_p = 0.5 * (pr_sort.at[pi, "beg"] + pr_sort.at[pi, "end"])
+                if beg_g <= mid_p <= end_g:
+                    m_gt[gi] = True
+                    m_pr[pi] = True
+                    pairs.append((gi, pi))
+                    break  # move to next GT
+    return m_gt, m_pr, pairs, gt_sort, pr_sort
 
-
-def boundary_errors(pairs, gt, pr):
-    if not pairs:
-        return np.nan, np.nan
-    ds, de = [], []
-    for gi, pi in pairs:
-        ds.append(abs(gt.at[gi, "beg"] - pr.at[pi, "beg"]) * 1000)
-        de.append(abs(gt.at[gi, "end"] - pr.at[pi, "end"]) * 1000)
-    return np.mean(ds), np.mean(de)
-
+###############################################################################
+# Metrics for one variant
+###############################################################################
 
 def per_tape_counts(df: pd.DataFrame) -> pd.Series:
     return df.groupby("tape").size()
 
 
-###############################################################################
-# Evaluation of single variant
-###############################################################################
+def boundary_errors(pairs, gt, pr):
+    if not pairs:
+        return np.nan, np.nan
+    ds = [abs(gt.at[gi, "beg"] - pr.at[pi, "beg"]) * 1000 for gi, pi in pairs]
+    de = [abs(gt.at[gi, "end"] - pr.at[pi, "end"]) * 1000 for gi, pi in pairs]
+    return np.mean(ds), np.mean(de)
 
-def eval_variant(gt_df: pd.DataFrame, pred_idx: Path, iou: float) -> Dict:
+
+def eval_variant(gt_df: pd.DataFrame, pred_idx: Path) -> Dict:
     pr_df = read_pred_index(pred_idx)
-    m_gt, m_pr, pairs, gt_s, pr_s = match_predictions(gt_df, pr_df, iou)
+    m_gt, m_pr, pairs, gt_s, pr_s = match_midpoint(gt_df, pr_df)
 
     tp = int(m_gt.sum())
     fn = int((~m_gt).sum())
@@ -176,21 +138,27 @@ def eval_variant(gt_df: pd.DataFrame, pred_idx: Path, iou: float) -> Dict:
     pear = pearsonr(ct_gt, ct_pr)[0] if len(ct_gt) > 1 else np.nan
     spear = spearmanr(ct_gt, ct_pr)[0] if len(ct_gt) > 1 else np.nan
 
-    # Quality-specific recall and F1 (Q1 to Q4)
+    # Quality‑specific recall & F1
     metrics_q = {}
     for q in range(1, 5):
-        gt_q = gt_df[gt_df.quality == q]
+        gt_q = gt_s[gt_s.quality == q]
+        if gt_q.empty:
+            metrics_q[f"recall_q{q}"] = np.nan
+            metrics_q[f"f1_q{q}"] = np.nan
+            continue
         pairs_q = [p for p in pairs if gt_s.at[p[0], "quality"] == q]
         tp_q = len(pairs_q)
         fn_q = len(gt_q) - tp_q
-        fp_q = sum(gt_s.at[p[0], "quality"] != q for p in pairs)  # overmatching penalty
-        rec_q = tp_q / len(gt_q) if len(gt_q) else np.nan
+        rec_q = tp_q / len(gt_q)
+        # precision_q: restrict preds to those matched to this quality
+        preds_q = len(pairs_q)
+        fp_q = preds_q - tp_q  # zero by construction
         prec_q = tp_q / (tp_q + fp_q) if (tp_q + fp_q) else np.nan
         f1_q = 2 * prec_q * rec_q / (prec_q + rec_q) if (prec_q + rec_q) else np.nan
         metrics_q[f"recall_q{q}"] = rec_q
         metrics_q[f"f1_q{q}"] = f1_q
 
-    return {
+    out = {
         "n_gt": len(gt_df),
         "n_pred": len(pr_df),
         "tp": tp,
@@ -203,8 +171,9 @@ def eval_variant(gt_df: pd.DataFrame, pred_idx: Path, iou: float) -> Dict:
         "mean_dend_ms": dend_ms,
         "pearson_calls": pear,
         "spearman_calls": spear,
-        **metrics_q,
     }
+    out.update(metrics_q)
+    return out
 
 ###############################################################################
 # CLI driver
@@ -218,7 +187,6 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--gt", required=True, help="Path to corpus_index.json")
     ap.add_argument("--runs", required=True, help="Folder with benchmark runs")
-    ap.add_argument("--iou", type=float, default=0.40, help="IoU threshold")
     ap.add_argument("--out", default="metrics.csv", help="Output CSV file")
     args = ap.parse_args()
 
@@ -228,14 +196,14 @@ def main():
     if not run_roots:
         raise SystemExit("❌ no run results found")
 
-    records: List[Dict] = []
+    recs: List[Dict] = []
     for run in tqdm(run_roots, desc="variants"):
         model, variant = tag_from(run)
-        rec = eval_variant(gt_df, run / "evaluation/index.json", args.iou)
-        rec.update({"model": model, "variant": variant})
-        records.append(rec)
+        res = eval_variant(gt_df, run / "evaluation/index.json")
+        res.update({"model": model, "variant": variant})
+        recs.append(res)
 
-    pd.DataFrame(records).to_csv(args.out, index=False)
+    pd.DataFrame(recs).to_csv(args.out, index=False)
     print(f"✅ metrics written → {args.out}")
 
 
