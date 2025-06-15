@@ -1,5 +1,5 @@
 {
-  "active_strategy": "quality_balanced",
+  "active_strategy": "random_by_clip",
 
   "strategies": {
     "random_by_clip": {

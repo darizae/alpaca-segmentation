@@ -144,7 +144,7 @@ def main():
     with index_fp.open() as fh:
         idx = json.load(fh)
     entries = idx["entries"]
-    clip_len_s = idx["meta"]["clip_duration_s"]
+    meta_clip_len = idx["meta"].get("clip_duration_s")
 
     # build occupied map only for tapes that really exist
     tape2hums = defaultdict(list)
@@ -194,8 +194,9 @@ def main():
             margin = s_cfg["noise_mining"]["margin_s"]
 
             # try inside labelled 15-min clip
+            clip_len = meta_clip_len or e["clip_dur_s"]
             slot = find_free_slot(dur,
-                                  Interval(0, clip_len_s),
+                                  Interval(0, clip_len),
                                   [Interval(e["clip_start_s"], e["clip_end_s"])],
                                   margin, rng)
             source_fp = clip_fp if slot else None
