@@ -2,6 +2,7 @@
 data/
 
 BENCHMARK/
+TRAINING/
 
 # Ignore all .zip files in data/
 data/*.zip
