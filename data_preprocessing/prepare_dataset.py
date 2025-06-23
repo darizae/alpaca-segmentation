@@ -184,13 +184,15 @@ def main():
     cfg_fp = Path(__file__).with_name("dataset_prep_configs.json")
     with cfg_fp.open() as fh:
         cfg = json.load(fh)
-    strat_name = cfg["active_strategy"]
-    s_cfg = cfg["strategies"][strat_name]
+    active_key = cfg["active_strategy"]
+    s_cfg = cfg["strategies"][active_key]
+    strat_name = s_cfg["split_strategy"]
+
     if strat_name not in STRATEGY_FUN:
         raise ValueError(f"Unknown split strategy {strat_name}")
 
     rng = random.Random(s_cfg["seed"])
-    out_dir = corpus / f"dataset_{strat_name}"
+    out_dir = corpus / f"dataset_{active_key}"
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
