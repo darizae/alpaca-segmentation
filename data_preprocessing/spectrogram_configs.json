@@ -1,0 +1,14 @@
+{
+  "active_preset": "hi_res",
+  "presets": {
+    "hi_res": {
+      "sample_rate": 48000,
+      "n_fft": 2048,
+      "hop_length": 512,
+      "window": "hann",
+      "freq_low": 0,
+      "freq_high": 4000,
+      "dpi": 350
+    }
+  }
+}
