@@ -104,10 +104,64 @@ def split_quality_balanced(items, seed, fracs):
     return splits
 
 
+def split_proportional_clipwise_by_tape(items, seed, fracs):
+    rng = random.Random(seed)
+
+    # Group clips by their tape_key
+    tape2clips = defaultdict(list)
+    for item in items:
+        tape2clips[item["tape_key"]].append(item)
+
+    # Prepare split containers
+    splits = {"train": [], "val": [], "test": []}
+    split_keys = list(splits.keys())
+
+    # For each tape, split its clips proportionally
+    for tape_key, clips in tape2clips.items():
+        rng.shuffle(clips)
+        n = len(clips)
+        i1 = int(fracs[0] * n)
+        i2 = i1 + int(fracs[1] * n)
+        splits["train"].extend(clips[:i1])
+        splits["val"].extend(clips[i1:i2])
+        splits["test"].extend(clips[i2:])
+
+    return splits
+
+
+def split_quality_and_tape_balanced(items, seed, fracs):
+    rng = random.Random(seed)
+
+    # Group clips by (tape_key, quality)
+    combo2clips = defaultdict(list)
+    for item in items:
+        combo = (item["tape_key"], item["quality"])
+        combo2clips[combo].append(item)
+
+    # Prepare split containers
+    splits = {"train": [], "val": [], "test": []}
+    split_keys = list(splits.keys())
+
+    # For each (tape, quality) group, split proportionally
+    for combo_key, clips in combo2clips.items():
+        rng.shuffle(clips)
+        n = len(clips)
+        i1 = int(fracs[0] * n)
+        i2 = i1 + int(fracs[1] * n)
+        splits["train"].extend(clips[:i1])
+        splits["val"].extend(clips[i1:i2])
+        splits["test"].extend(clips[i2:])
+
+    return splits
+
+
+
 STRATEGY_FUN = {
     "random_by_clip": split_random_by_clip,
     "proportional_by_tape": split_proportional_by_tape,
     "quality_balanced": split_quality_balanced,
+    "proportional_clipwise_by_tape": split_proportional_clipwise_by_tape,
+    "quality_and_tape_balanced": split_quality_and_tape_balanced,
 }
 
 # ─────────────────────────── regexes ────────────────────────────

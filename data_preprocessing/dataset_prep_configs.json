@@ -1,5 +1,5 @@
 {
-  "active_strategy": "random_by_clip",
+  "active_strategy": "random_by_clip_corrected",
 
   "strategies": {
     "random_by_clip": {
@@ -32,6 +32,50 @@
       "noise_mining": {
         "margin_s": 0.1,
         "fallback_raw": false
+      }
+    },
+
+    "proportional_by_tape_corrected": {
+      "split_strategy": "proportional_by_tape",
+      "seed": 1731,
+      "min_quality": 1,
+      "noise_per_hum": 1,
+      "noise_mining": {
+        "margin_s": 0.05,
+        "fallback_raw": true
+      }
+    },
+
+    "quality_balanced_corrected": {
+      "split_strategy": "quality_balanced",
+      "seed": 911,
+      "min_quality": 1,
+      "noise_per_hum": 1,
+      "noise_mining": {
+        "margin_s": 0.05,
+        "fallback_raw": true
+      }
+    },
+
+    "proportional_clipwise_by_tape": {
+      "split_strategy": "proportional_clipwise_by_tape",
+      "seed": 1401,
+      "min_quality": 1,
+      "noise_per_hum": 1,
+      "noise_mining": {
+        "margin_s": 0.05,
+        "fallback_raw": true
+      }
+    },
+
+    "quality_and_tape_balanced": {
+      "split_strategy": "quality_and_tape_balanced",
+      "seed": 2048,
+      "min_quality": 1,
+      "noise_per_hum": 1,
+      "noise_mining": {
+        "margin_s": 0.05,
+        "fallback_raw": true
       }
     }
   }
