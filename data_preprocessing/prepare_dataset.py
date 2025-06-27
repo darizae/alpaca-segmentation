@@ -309,6 +309,42 @@ def _generate_spectrogram(wav_path: Path, png_path: Path, cfg: dict[str, Any]):
     plt.close()
 
 
+def check_noise_overlap(variant_index_path: Path):
+    with variant_index_path.open() as fh:
+        index = json.load(fh)
+
+    noise_rows = [r for r in index["entries"] if r["class"] == "noise"]
+    by_tape: dict[str, list[dict]] = defaultdict(list)
+    for row in noise_rows:
+        by_tape[row["tape_key"]].append(row)
+
+    n_total = len(noise_rows)
+    n_overlap = 0
+    n_duplicates = 0
+    examples = []
+
+    for tape_key, rows in by_tape.items():
+        sorted_rows = sorted(rows, key=lambda r: r["start_s"])
+        for i in range(1, len(sorted_rows)):
+            prev = sorted_rows[i - 1]
+            curr = sorted_rows[i]
+            if curr["start_s"] < prev["end_s"]:
+                n_overlap += 1
+                if curr["start_s"] == prev["start_s"] and curr["end_s"] == prev["end_s"]:
+                    n_duplicates += 1
+                if len(examples) < 5:
+                    examples.append((prev, curr))
+
+    print(f"   🧐 noise overlap check on {variant_index_path.parent.name}:")
+    print(f"      total noise clips   : {n_total}")
+    print(f"      overlapping clips   : {n_overlap}")
+    print(f"      exact duplicates    : {n_duplicates}")
+    if examples:
+        print("      first few overlaps:")
+        for prev, curr in examples:
+            print(f"         {prev['fn']}  <->  {curr['fn']}")
+
+
 # ─────────────────────────── main ───────────────────────────────
 
 def main():
@@ -329,172 +365,193 @@ def main():
     cfg_fp = Path(__file__).with_name("dataset_prep_configs.json")
     with cfg_fp.open() as fh:
         cfg = json.load(fh)
-    active_key = cfg["active_strategy"]
-    s_cfg = cfg["strategies"][active_key]
-    strat_name = s_cfg["split_strategy"]
 
-    if strat_name not in STRATEGY_FUN:
-        raise ValueError(f"Unknown split strategy {strat_name}")
+    active_keys = cfg.get("active_strategies", [])
 
-    rng = random.Random(s_cfg["seed"])
-    out_dir = corpus / f"dataset_{active_key}"
-    if out_dir.exists():
-        shutil.rmtree(out_dir)
-    out_dir.mkdir(parents=True)
+    if not active_keys:
+        raise ValueError("No active_strategies defined in config.")
 
-    #   read corpus index --------------------------------------------------
-    with index_fp.open() as fh:
-        idx = json.load(fh)
-    entries = idx["entries"]
-    meta_clip_len = idx["meta"].get("clip_duration_s")
+    for active_key in active_keys:
+        s_cfg = cfg["strategies"][active_key]
+        strat_name = s_cfg["split_strategy"]
 
-    # build occupied map only for tapes that really exist
-    tape2hums = defaultdict(list)
-    for e in entries:
-        if e["quality"] < s_cfg["min_quality"] or e["raw_path"] is None:
-            continue
-        tape2hums[e["raw_path"]].append(Interval(e["raw_start_s"], e["raw_end_s"]))
+        if strat_name not in STRATEGY_FUN:
+            raise ValueError(f"Unknown split strategy '{strat_name}' in config.")
 
-    # ---------- prepare optional spectrogram setup --------------
-    spec_cfg = _load_spectrogram_config()
-    preset = spec_cfg["presets"][spec_cfg["active_preset"]]
-    if args.generate_spectrograms:
-        spec_root = out_dir / "spectrograms"
-        spec_root.mkdir()
+        print(f"\n▶️  Preparing dataset for strategy: '{active_key}'")
 
-    uid_gen = count(1)
-    wav_rows: List[dict[str, Any]] = []
-    exported = Counter()
+        rng = random.Random(s_cfg["seed"])
+        out_dir = corpus / f"dataset_{active_key}"
+        if out_dir.exists():
+            shutil.rmtree(out_dir)
+        out_dir.mkdir(parents=True)
 
-    for e in entries:
-        if e["quality"] < s_cfg["min_quality"]:
-            continue
+        rng = random.Random(s_cfg["seed"])
+        out_dir = corpus / f"dataset_{active_key}"
+        if out_dir.exists():
+            shutil.rmtree(out_dir)
+        out_dir.mkdir(parents=True)
 
-        # ---------- resolve raw metadata even if raw_path is None
-        if e["raw_path"]:
-            raw_fname = Path(e["raw_path"]).name
-            raw_fp_exists = (corpus / e["raw_path"]).exists()
-        else:
-            clip_fname = Path(e["clip_path"]).name
-            cm = CLIP_RE.match(clip_fname)
-            raw_fname = cm["raw"]
-            raw_fp_exists = False  # cannot fallback to raw
+        #   read corpus index --------------------------------------------------
+        with index_fp.open() as fh:
+            idx = json.load(fh)
+        entries = idx["entries"]
+        meta_clip_len = idx["meta"].get("clip_duration_s")
 
-        year = RAW_RE.match(raw_fname)["date"][:4] if RAW_RE.match(raw_fname) else "0000"
-        tape_clean = raw_fname.replace(".wav", "").replace("_", "-")
+        # build occupied map only for tapes that really exist
+        tape2hums = defaultdict(list)
+        for e in entries:
+            if e["quality"] < s_cfg["min_quality"] or e["raw_path"] is None:
+                continue
+            tape2hums[e["raw_path"]].append(Interval(e["raw_start_s"], e["raw_end_s"]))
 
-        # paths
-        clip_fp = corpus / e["clip_path"]
-        hum_fp = corpus / e["hum_path"]
+        # ---------- prepare optional spectrogram setup --------------
+        spec_cfg = _load_spectrogram_config()
+        preset = spec_cfg["presets"][spec_cfg["active_preset"]]
+        if args.generate_spectrograms:
+            spec_root = out_dir / "spectrograms"
+            spec_root.mkdir()
 
-        # ---------- export TARGET (the labelled hum) ------------
-        uid = next(uid_gen)
-        tgt_fn = build_name("target", f"Q{e['quality']}", uid, year, tape_clean,
-                            ms(e["clip_start_s"]), ms(e["clip_end_s"]))
-        shutil.copy2(hum_fp, out_dir / tgt_fn)
+        uid_gen = count(1)
+        wav_rows: List[dict[str, Any]] = []
+        exported = Counter()
 
-        tape_key = e["raw_path"] or e["clip_path"]
+        for e in entries:
+            if e["quality"] < s_cfg["min_quality"]:
+                continue
 
-        wav_row = {
-            "uid": uid,
-            "fn": tgt_fn,
-            "class": "target",
-            "label": f"Q{e['quality']}",
-            "tape_key": tape_key,
-            "quality": e["quality"],
-            "source": "labelled",
-            "start_ms": ms(e["clip_start_s"]),
-            "end_ms": ms(e["clip_end_s"]),
-            "start_s": e["clip_start_s"],
-            "end_s": e["clip_end_s"],
-        }
-        wav_rows.append(wav_row)
-        exported["target"] += 1
+            # ---------- resolve raw metadata even if raw_path is None
+            if e["raw_path"]:
+                raw_fname = Path(e["raw_path"]).name
+                raw_fp_exists = (corpus / e["raw_path"]).exists()
+            else:
+                clip_fname = Path(e["clip_path"]).name
+                cm = CLIP_RE.match(clip_fname)
+                raw_fname = cm["raw"]
+                raw_fp_exists = False  # cannot fallback to raw
 
-        # ---------- export NOISE(S) ------------------------------
-        for _ in range(s_cfg["noise_per_hum"]):
-            dur = e["clip_end_s"] - e["clip_start_s"]
-            margin = s_cfg["noise_mining"]["margin_s"]
-            clip_len = meta_clip_len or e["clip_dur_s"]
+            year = RAW_RE.match(raw_fname)["date"][:4] if RAW_RE.match(raw_fname) else "0000"
+            tape_clean = raw_fname.replace(".wav", "").replace("_", "-")
 
-            slot = find_free_slot(dur,
-                                  Interval(0, clip_len),
-                                  [Interval(e["clip_start_s"], e["clip_end_s"])],
-                                  margin, rng)
-            source_fp = clip_fp if slot else None
-            source_type = "clip"
+            # paths
+            clip_fp = corpus / e["clip_path"]
+            hum_fp = corpus / e["hum_path"]
 
-            # fallback to raw ------------------------------------------------
-            if slot is None and s_cfg["noise_mining"]["fallback_raw"] and raw_fp_exists:
-                raw_fp = corpus / e["raw_path"]
-                info = sf.info(raw_fp)
-                slot = find_free_slot(dur,
-                                      Interval(0, info.frames / info.samplerate),
-                                      tape2hums[e["raw_path"]],
-                                      0.0, rng)
-                source_fp = raw_fp if slot else None
-                source_type = "raw"
-            if slot is None:
-                continue  # could not mine noise – rare edge case
-
-            s_sec, e_sec = slot
-            info = sf.info(source_fp)
-            audio, _ = sf.read(source_fp,
-                               start=int(s_sec * info.samplerate),
-                               stop=int(e_sec * info.samplerate))
-            uid_n = next(uid_gen)
-            ns_fn = build_name("noise", "bg", uid_n, year, tape_clean,
-                               ms(s_sec), ms(e_sec))
-            sf.write(out_dir / ns_fn, audio, info.samplerate)
+            # ---------- export TARGET (the labelled hum) ------------
+            uid = next(uid_gen)
+            tgt_fn = build_name("target", f"Q{e['quality']}", uid, year, tape_clean,
+                                ms(e["clip_start_s"]), ms(e["clip_end_s"]))
+            shutil.copy2(hum_fp, out_dir / tgt_fn)
 
             tape_key = e["raw_path"] or e["clip_path"]
 
-            wav_row_n = {
-                "uid": uid_n,
-                "fn": ns_fn,
-                "class": "noise",
-                "label": "bg",
+            wav_row = {
+                "uid": uid,
+                "fn": tgt_fn,
+                "class": "target",
+                "label": f"Q{e['quality']}",
                 "tape_key": tape_key,
-                "quality": e["quality"],  # propagate quality bucket of hum
-                "source": source_type,
-                "start_ms": ms(s_sec),
-                "end_ms": ms(e_sec),
-                "start_s": round(s_sec, 3),
-                "end_s": round(e_sec, 3),
+                "quality": e["quality"],
+                "source": "labelled",
+                "start_ms": ms(e["clip_start_s"]),
+                "end_ms": ms(e["clip_end_s"]),
+                "start_s": e["clip_start_s"],
+                "end_s": e["clip_end_s"],
             }
-            wav_rows.append(wav_row_n)
-            exported["noise"] += 1
+            wav_rows.append(wav_row)
+            exported["target"] += 1
 
-    # ---------- deterministic split -----------------------------
-    fracs = (0.70, 0.15, 0.15)
-    splits = STRATEGY_FUN[strat_name](wav_rows, s_cfg["seed"], fracs)
-    for split, rows in splits.items():
-        with (out_dir / f"{split}.csv").open("w", newline="") as fh:
-            csv.writer(fh).writerows([[r["fn"]] for r in rows])
-        for r in rows:
-            r["split"] = split  # annotate for variant index
+            # ---------- export NOISE(S) ------------------------------
+            for _ in range(s_cfg["noise_per_hum"]):
+                dur = e["clip_end_s"] - e["clip_start_s"]
+                margin = s_cfg["noise_mining"]["margin_s"]
+                clip_len = meta_clip_len or e["clip_dur_s"]
 
-    # ---------- selection tables (needs pandas) -----------------
-    _write_selection_tables(wav_rows, out_dir)
+                slot = find_free_slot(dur,
+                                      Interval(0, clip_len),
+                                      [Interval(e["clip_start_s"], e["clip_end_s"])],
+                                      margin, rng)
+                source_fp = clip_fp if slot else None
+                source_type = "clip"
 
-    # ---------- spectrograms -----------------------------------
-    if args.generate_spectrograms:
-        print("   🎨  generating spectrograms – this may take a while …")
-        for r in wav_rows:
-            wav_fp = out_dir / r["fn"]
-            png_fp = spec_root / (Path(r["fn"]).with_suffix(".png").name)
-            _generate_spectrogram(wav_fp, png_fp, preset)
-            r["spectrogram_path"] = str(png_fp.relative_to(out_dir))
-        print(f"   🖼️   {len(wav_rows)} PNGs written → {spec_root.relative_to(out_dir.parent)}")
+                # fallback to raw ------------------------------------------------
+                fallback_raw_used = False
+                if slot is None and s_cfg["noise_mining"]["fallback_raw"] and raw_fp_exists:
+                    fallback_raw_used = True
+                    raw_fp = corpus / e["raw_path"]
+                    info = sf.info(raw_fp)
+                    slot = find_free_slot(dur,
+                                          Interval(0, info.frames / info.samplerate),
+                                          tape2hums[e["raw_path"]],
+                                          0.0, rng)
+                    source_fp = raw_fp if slot else None
+                    source_type = "raw"
+                if slot is None:
+                    continue  # could not mine noise – rare edge case
 
-    # ---------- variant index JSON ------------------------------
-    _build_variant_index(wav_rows, strat_name, out_dir)
+                s_sec, e_sec = slot
+                info = sf.info(source_fp)
+                audio, _ = sf.read(source_fp,
+                                   start=int(s_sec * info.samplerate),
+                                   stop=int(e_sec * info.samplerate))
+                uid_n = next(uid_gen)
+                ns_fn = build_name("noise", "bg", uid_n, year, tape_clean,
+                                   ms(s_sec), ms(e_sec))
+                sf.write(out_dir / ns_fn, audio, info.samplerate)
 
-    # ---------- summary ----------------------------------------
-    print(f"\n✅  strategy '{strat_name}' → {out_dir.relative_to(corpus)}")
-    print(f"   {exported['target']} targets  +  {exported['noise']} noise clips")
-    for s in ("train", "val", "test"):
-        print(f"   {s:<5}: {len(splits[s]):5d} wavs")
+                tape_key = e["raw_path"] or e["clip_path"]
+
+                wav_row_n = {
+                    "uid": uid_n,
+                    "fn": ns_fn,
+                    "class": "noise",
+                    "label": "bg",
+                    "tape_key": tape_key,
+                    "quality": e["quality"],  # propagate quality bucket of hum
+                    "source": source_type,
+                    "start_ms": ms(s_sec),
+                    "end_ms": ms(e_sec),
+                    "start_s": round(s_sec, 3),
+                    "end_s": round(e_sec, 3),
+                }
+                wav_rows.append(wav_row_n)
+                exported["noise"] += 1
+
+        # ---------- deterministic split -----------------------------
+        fracs = (0.70, 0.15, 0.15)
+        splits = STRATEGY_FUN[strat_name](wav_rows, s_cfg["seed"], fracs)
+        for split, rows in splits.items():
+            with (out_dir / f"{split}.csv").open("w", newline="") as fh:
+                csv.writer(fh).writerows([[r["fn"]] for r in rows])
+            for r in rows:
+                r["split"] = split  # annotate for variant index
+
+        # ---------- selection tables (needs pandas) -----------------
+        _write_selection_tables(wav_rows, out_dir)
+
+        # ---------- spectrograms -----------------------------------
+        if args.generate_spectrograms:
+            print("   🎨  generating spectrograms – this may take a while …")
+            for r in wav_rows:
+                wav_fp = out_dir / r["fn"]
+                png_fp = spec_root / (Path(r["fn"]).with_suffix(".png").name)
+                _generate_spectrogram(wav_fp, png_fp, preset)
+                r["spectrogram_path"] = str(png_fp.relative_to(out_dir))
+            print(f"   🖼️   {len(wav_rows)} PNGs written → {spec_root.relative_to(out_dir.parent)}")
+
+        # ---------- variant index JSON ------------------------------
+        _build_variant_index(wav_rows, strat_name, out_dir)
+
+        # ---------- summary ----------------------------------------
+        print(f"\n✅  strategy '{strat_name}' → {out_dir.relative_to(corpus)}")
+        print(f"   {exported['target']} targets  +  {exported['noise']} noise clips")
+        for s in ("train", "val", "test"):
+            print(f"   {s:<5}: {len(splits[s]):5d} wavs")
+        if s_cfg["noise_mining"].get("fallback_raw", False):
+            print(f"   🔁 fallback_raw was {'✅ used' if fallback_raw_used else '❌ never used'}")
+
+        variant_index_path = out_dir / "variant_index.json"
+        check_noise_overlap(variant_index_path)
 
 
 # -----------------------------------------------------------------
