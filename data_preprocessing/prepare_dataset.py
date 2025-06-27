@@ -96,29 +96,13 @@ def find_free_slot(dur: float, container: Interval,
 SplitFun = Callable[[List[dict], int, Tuple[float, float, float]], Dict[str, List[dict]]]
 
 
-def split_random_by_clip(items, seed, fracs):
+def split_random(items, seed, fracs):
     rng = random.Random(seed)
     rng.shuffle(items)
     n = len(items)
     i1 = int(fracs[0] * n);
     i2 = i1 + int(fracs[1] * n)
     return {"train": items[:i1], "val": items[i1:i2], "test": items[i2:]}
-
-
-def split_proportional_by_tape(items, seed, fracs):
-    rng = random.Random(seed)
-    tape2 = defaultdict(list)
-    for it in items:
-        tape2[it["tape_key"]].append(it)
-    tapes = list(tape2.keys());
-    rng.shuffle(tapes)
-    need = {k: int(f * len(items)) for k, f in zip(("train", "val", "test"), fracs)}
-    splits = {k: [] for k in need}
-    for tp in tapes:
-        lack = {k: need[k] - len(v) for k, v in splits.items()}
-        target = max(lack, key=lack.get)
-        splits[target].extend(tape2[tp])
-    return splits
 
 
 def split_quality_balanced(items, seed, fracs):
@@ -128,13 +112,13 @@ def split_quality_balanced(items, seed, fracs):
         q2[it["quality"]].append(it)
     splits = {"train": [], "val": [], "test": []}
     for q, bucket in q2.items():
-        bucket_split = split_random_by_clip(bucket, rng.randint(0, 1 << 30), fracs)
+        bucket_split = split_random(bucket, rng.randint(0, 1 << 30), fracs)
         for k in splits: splits[k].extend(bucket_split[k])
     for k in splits: rng.shuffle(splits[k])
     return splits
 
 
-def split_proportional_clipwise_by_tape(items, seed, fracs):
+def split_clipwise_balanced(items, seed, fracs):
     rng = random.Random(seed)
     tape2clips = defaultdict(list)
     for item in items:
@@ -151,7 +135,7 @@ def split_proportional_clipwise_by_tape(items, seed, fracs):
     return splits
 
 
-def split_quality_and_tape_balanced(items, seed, fracs):
+def split_quality_and_clipwise_balanced(items, seed, fracs):
     rng = random.Random(seed)
     combo2clips = defaultdict(list)
     for item in items:
@@ -170,11 +154,10 @@ def split_quality_and_tape_balanced(items, seed, fracs):
 
 
 STRATEGY_FUN: Dict[str, SplitFun] = {
-    "random_by_clip": split_random_by_clip,
-    "proportional_by_tape": split_proportional_by_tape,
+    "random": split_random,
     "quality_balanced": split_quality_balanced,
-    "proportional_clipwise_by_tape": split_proportional_clipwise_by_tape,
-    "quality_and_tape_balanced": split_quality_and_tape_balanced,
+    "clipwise_balanced": split_clipwise_balanced,
+    "quality_and_clipwise_balanced": split_quality_and_clipwise_balanced,
 }
 
 # ─────────────────────────── regexes ────────────────────────────

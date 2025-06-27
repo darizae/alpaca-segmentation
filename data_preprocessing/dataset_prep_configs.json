@@ -1,36 +1,19 @@
 {
-  "active_strategy": "random_by_clip",
+  "active_strategies": [
+    "random",
+    "quality_balanced",
+    "clipwise_balanced",
+    "quality_and_clipwise_balanced"
+  ],
 
   "strategies": {
-    "random_by_clip": {
-      "split_strategy": "random_by_clip",
+    "random": {
+      "split_strategy": "random",
       "seed": 42,
       "min_quality": 1,
       "noise_per_hum": 1,
       "noise_mining": {
-        "margin_s": 0.05,
-        "fallback_raw": true
-      }
-    },
-
-    "proportional_by_tape": {
-      "split_strategy": "proportional_by_tape",
-      "seed": 1731,
-      "min_quality": 2,
-      "noise_per_hum": 2,
-      "noise_mining": {
-        "margin_s": 0.05,
-        "fallback_raw": true
-      }
-    },
-
-    "proportional_by_tape_corrected": {
-      "split_strategy": "proportional_by_tape",
-      "seed": 1731,
-      "min_quality": 1,
-      "noise_per_hum": 1,
-      "noise_mining": {
-        "margin_s": 0.05,
+        "margin_s": 0.1,
         "fallback_raw": true
       }
     },
@@ -42,39 +25,28 @@
       "noise_per_hum": 1,
       "noise_mining": {
         "margin_s": 0.1,
-        "fallback_raw": false
-      }
-    },
-
-    "quality_and_tape_balanced": {
-      "split_strategy": "quality_and_tape_balanced",
-      "seed": 2048,
-      "min_quality": 1,
-      "noise_per_hum": 1,
-      "noise_mining": {
-        "margin_s": 0.05,
         "fallback_raw": true
       }
     },
 
-    "quality_balanced_corrected": {
-      "split_strategy": "quality_balanced",
-      "seed": 911,
-      "min_quality": 1,
-      "noise_per_hum": 1,
-      "noise_mining": {
-        "margin_s": 0.05,
-        "fallback_raw": true
-      }
-    },
-
-    "proportional_clipwise_by_tape": {
-      "split_strategy": "proportional_clipwise_by_tape",
+    "clipwise_balanced": {
+      "split_strategy": "clipwise_balanced",
       "seed": 1401,
       "min_quality": 1,
       "noise_per_hum": 1,
       "noise_mining": {
-        "margin_s": 0.05,
+        "margin_s": 0.1,
+        "fallback_raw": true
+      }
+    },
+
+    "quality_and_clipwise_balanced": {
+      "split_strategy": "quality_and_clipwise_balanced",
+      "seed": 2048,
+      "min_quality": 1,
+      "noise_per_hum": 1,
+      "noise_mining": {
+        "margin_s": 0.1,
         "fallback_raw": true
       }
     }
