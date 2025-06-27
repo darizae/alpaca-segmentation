@@ -27,31 +27,76 @@ Requirements (new in v2.0)
 All other dependencies are unchanged from v1.1.
 """
 from __future__ import annotations
-import argparse, json, random, shutil, csv, re, datetime, sys
+
+import argparse
+import csv
+import datetime
+import json
+import random
+import re
+import shutil
+import sys
 from collections import defaultdict, Counter
 from itertools import count
 from pathlib import Path
-from typing import List, Tuple, Dict, Any
 from typing import Callable
+from typing import List, Tuple, Dict, Any
 
-import soundfile as sf
+import librosa
+import librosa.display
+import matplotlib as mpl
 import numpy as np
-
-# Optional – only imported if the user requests spectrograms
-try:
-    import librosa, librosa.display  # type: ignore
-    import matplotlib.pyplot as plt  # type: ignore
-except ImportError:
-    librosa = None  # noqa: N816
-    plt = None
-
-try:
-    import pandas as pd  # type: ignore
-except ImportError:
-    pd = None  # type: ignore
+import pandas as pd
+import soundfile as sf
+from PIL import Image
+from scipy.signal import stft
 
 
 # ─────────────────────────── helpers ────────────────────────────
+def generate_fast_spectrogram_png(wav_path, png_path, cfg):
+    # 1) read
+    y, sr = sf.read(wav_path)
+
+    # 2) compute STFT
+    nperseg = min(cfg["n_fft"], len(y))
+    hop = min(cfg["hop_length"], max(nperseg - 1, 1))
+    f, t, Z = stft(
+        y, fs=sr,
+        nperseg=nperseg,
+        noverlap=nperseg - hop,
+        window=cfg["window"],
+        padded=False,
+        boundary=None,
+    )
+
+    # 3) to dB & clamp
+    S_db = 20 * np.log10(np.abs(Z) + 1e-6)
+    vmax = S_db.max()
+    vmin = vmax - cfg.get("dyn_range_db", 80)
+    S_db = np.clip(S_db, vmin, vmax)
+
+    # 4) normalize to [0,1]
+    norm = (S_db - vmin) / (vmax - vmin)
+
+    # 5) apply magma colormap → RGBA uint8
+    cmap = mpl.colormaps["magma"]  # ← use the new API
+    rgba = cmap(norm, bytes=True)  # shape=(freq_bins, time_frames, 4)
+
+    # 6) take RGB only
+    rgb = rgba[..., :3]
+
+    # 7) crop freq range
+    f_low = max(cfg.get("freq_low", 200), 1)
+    f_high = cfg.get("freq_high", sr // 2)
+    idx0 = np.searchsorted(f, f_low, side="left")
+    idx1 = np.searchsorted(f, f_high, side="right")
+    rgb = rgb[idx0:idx1, :, :]
+
+    # 8) save with Pillow
+    img = Image.fromarray(rgb)
+    img.save(png_path, format="PNG", optimize=True)
+
+
 def ms(t: float) -> int:
     return int(round(t * 1000))
 
@@ -265,31 +310,6 @@ def _build_variant_index(rows: List[dict[str, Any]],
     with (out_dir / "variant_index.json").open("w") as fh:
         json.dump(out, fh, indent=2)
     print(f"   📄  variant_index.json written ({len(rows)} entries)")
-
-
-# ─────────────────────────── spectrogram helpers ────────────────
-
-def _generate_spectrogram(wav_path: Path, png_path: Path, cfg: dict[str, Any]):
-    """Render a PNG spectrogram covering 0‑4000 Hz for *wav_path*."""
-    y, sr = librosa.load(wav_path, sr=cfg["sample_rate"], mono=True)
-    spec = librosa.stft(y,
-                        n_fft=cfg["n_fft"],
-                        hop_length=cfg["hop_length"],
-                        window=cfg["window"])
-    spec_db = librosa.amplitude_to_db(np.abs(spec), ref=np.max)
-    # Limit frequency range ( rows correspond to frequencies 0..sr/2 )
-    hz_per_bin = sr / cfg["n_fft"]
-    max_bin = int(cfg.get("freq_high", 4000) / hz_per_bin)
-    spec_db = spec_db[:max_bin, :]
-    plt.figure(figsize=(6, 4))
-    librosa.display.specshow(spec_db, sr=sr,
-                             hop_length=cfg["hop_length"],
-                             x_axis='time', y_axis='hz')
-    plt.ylim(cfg.get("freq_low", 0), cfg.get("freq_high", 4000))
-    plt.axis('off')
-    plt.tight_layout(pad=0)
-    plt.savefig(png_path, dpi=150, bbox_inches='tight', pad_inches=0)
-    plt.close()
 
 
 def check_noise_overlap(variant_index_path: Path):
@@ -522,8 +542,8 @@ def main():
             print("   🎨  generating spectrograms – this may take a while …")
             for r in wav_rows:
                 wav_fp = out_dir / r["fn"]
-                png_fp = spec_root / (Path(r["fn"]).with_suffix(".png").name)
-                _generate_spectrogram(wav_fp, png_fp, preset)
+                png_fp = spec_root / Path(r["fn"]).with_suffix(".png").name
+                generate_fast_spectrogram_png(wav_fp, png_fp, preset)
                 r["spectrogram_path"] = str(png_fp.relative_to(out_dir))
             print(f"   🖼️   {len(wav_rows)} PNGs written → {spec_root.relative_to(out_dir.parent)}")
 

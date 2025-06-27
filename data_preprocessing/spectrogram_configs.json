@@ -1,14 +1,15 @@
 {
-  "active_preset": "hi_res",
+  "active_preset": "default",
   "presets": {
-    "hi_res": {
+    "default": {
       "sample_rate": 48000,
       "n_fft": 2048,
       "hop_length": 512,
       "window": "hann",
-      "freq_low": 0,
+      "freq_low": 200,
       "freq_high": 4000,
-      "dpi": 350
+      "dyn_range_db": 80,
+      "method": "scipy_stft"
     }
   }
 }
