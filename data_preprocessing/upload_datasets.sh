@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ------------------------------------------------------------
-# upload_all_datasets.sh
+# upload_datasets.sh
 # Uploads all dataset_* folders from a given root directory
 # into a named wrapper folder on the remote server.
 # ------------------------------------------------------------

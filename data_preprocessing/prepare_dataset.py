@@ -445,7 +445,12 @@ def main():
             exported["target"] += 1
 
             # ---------- export NOISE(S) ------------------------------
-            for _ in range(s_cfg["noise_per_hum"]):
+            n_noises = s_cfg["noise_per_hum"]
+            n_trials = int(n_noises)
+            if rng.random() < (n_noises - n_trials):
+                n_trials += 1
+
+            for _ in range(n_trials):
                 dur = e["clip_end_s"] - e["clip_start_s"]
                 margin = s_cfg["noise_mining"]["margin_s"]
                 clip_len = meta_clip_len or e["clip_dur_s"]
