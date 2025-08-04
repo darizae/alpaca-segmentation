@@ -103,31 +103,63 @@ def iter_audio_segments(
 ) -> Iterable[tuple[str, np.ndarray, int]]:
     """
     Yields (png_stub, mono_audio, sample_rate)
-
-    png_stub is used to name the PNG ('.png' will be appended).
     """
-    if flavour == "corpus":  # one PNG per hum clip
-        for e in idx["entries"]:
-            wav_fp = audio_root / e["hum_path"]
-            y, sr = sf.read(wav_fp)
-            yield wav_fp.stem, y, sr
+    def normalize(name: str) -> str:
+        return name.lower().replace(".wav", "").replace("(", "").replace(")", "").replace("-", "_")
 
-    elif flavour == "variant":  # e["fn"] lives beside dataset
-        for e in idx["entries"]:
-            wav_fp = audio_root / e["fn"]
-            y, sr = sf.read(wav_fp)
-            yield wav_fp.stem, y, sr
+    def score(a: str, b: str) -> float:
+        # simple containment + prefix match scoring
+        a_norm, b_norm = normalize(a), normalize(b)
+        if a_norm in b_norm or b_norm in a_norm:
+            return 1.0
+        common_prefix_len = len([c for c, d in zip(a_norm, b_norm) if c == d])
+        return common_prefix_len / max(len(a_norm), len(b_norm))
 
-    elif flavour == "pred":  # slice from full tape
+    def find_best_match(target: str, candidates: list[Path]) -> Path | None:
+        best, best_score = None, 0
+        for cand in candidates:
+            sc = score(target, cand.stem)
+            if sc > best_score:
+                best, best_score = cand, sc
+        return best if best_score > 0.5 else None
+
+    # preload all .wav files from audio_root
+    audio_files = list(audio_root.glob("*.wav"))
+
+    if flavour == "corpus":
         for e in idx["entries"]:
-            wav_fp = audio_root / e["tape"]
-            info = sf.info(wav_fp)
+            target = Path(e["hum_path"]).stem
+            match = find_best_match(target, audio_files)
+            if not match:
+                print(f"✗ no match for {target}")
+                continue
+            y, sr = sf.read(match)
+            yield match.stem, y, sr
+
+    elif flavour == "variant":
+        for e in idx["entries"]:
+            target = Path(e["fn"]).stem
+            match = find_best_match(target, audio_files)
+            if not match:
+                print(f"✗ no match for {target}")
+                continue
+            y, sr = sf.read(match)
+            yield match.stem, y, sr
+
+    elif flavour == "pred":
+        for e in idx["entries"]:
+            target = Path(e["tape"]).stem
+            match = find_best_match(target, audio_files)
+            if not match:
+                print(f"✗ no match for {target}")
+                continue
+            info = sf.info(match)
             y, _ = sf.read(
-                wav_fp,
+                match,
                 start=int(e["start_s"] * info.samplerate),
                 stop=int(e["end_s"] * info.samplerate),
             )
-            yield f"{wav_fp.stem}_{e['uid']}", y, info.samplerate
+            yield f"{match.stem}_{e['uid']}", y, info.samplerate
 
 
 # ──────────────────────────── main ──────────────────────────────
