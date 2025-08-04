@@ -1,0 +1,14 @@
+Random Forest on mfcc_with_labels.csv  (neg_per_pos=1)
+              precision    recall  f1-score   support
+
+           0      0.982     0.855     0.914       262
+           1      0.800     0.974     0.879       156
+
+    accuracy                          0.900       418
+   macro avg      0.891     0.915     0.896       418
+weighted avg      0.914     0.900     0.901       418
+
+Confusion:
+[[224  38]
+ [  4 152]]
+ROC-AUC : 0.9634   PR-AUC : 0.9243

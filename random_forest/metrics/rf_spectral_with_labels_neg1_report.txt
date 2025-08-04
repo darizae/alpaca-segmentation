@@ -1,0 +1,14 @@
+Random Forest on spectral_with_labels.csv  (neg_per_pos=1)
+              precision    recall  f1-score   support
+
+           0      0.881     0.905     0.893       262
+           1      0.832     0.795     0.813       156
+
+    accuracy                          0.864       418
+   macro avg      0.857     0.850     0.853       418
+weighted avg      0.863     0.864     0.863       418
+
+Confusion:
+[[237  25]
+ [ 32 124]]
+ROC-AUC : 0.9281   PR-AUC : 0.8922

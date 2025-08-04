@@ -1,0 +1,14 @@
+Random Forest on features_with_labels.csv  (neg_per_pos=2)
+              precision    recall  f1-score   support
+
+           0      0.945     0.912     0.928       262
+           1      0.861     0.910     0.885       156
+
+    accuracy                          0.911       418
+   macro avg      0.903     0.911     0.906       418
+weighted avg      0.913     0.911     0.912       418
+
+Confusion:
+[[239  23]
+ [ 14 142]]
+ROC-AUC : 0.9658   PR-AUC : 0.9193
