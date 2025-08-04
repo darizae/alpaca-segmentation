@@ -1,5 +1,7 @@
 # Ignore all folders in data/
 data/
+random_forest/data/audio_recordings/
+evaluation_test/
 
 BENCHMARK*/
 TRAINING*/
