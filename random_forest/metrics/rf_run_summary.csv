@@ -1,0 +1,7 @@
+rank,csv,neg/pos,F1(target),Precision,Recall,ROC-AUC,FP,FN,accuracy
+1,features_with_labels.csv,2,0.885,0.861,0.91,0.966,23,14,0.911
+2,mfcc_with_labels.csv,1,0.879,0.8,0.974,0.963,38,4,0.9
+3,features_with_labels.csv,1,0.876,0.796,0.974,0.964,39,4,0.897
+4,mfcc_with_labels.csv,2,0.868,0.852,0.885,0.96,24,18,0.9
+5,spectral_with_labels.csv,1,0.813,0.832,0.795,0.928,25,32,0.864
+6,spectral_with_labels.csv,2,0.769,0.92,0.66,0.915,9,53,0.852

@@ -12,9 +12,11 @@ Usage
 
 from pathlib import Path
 import re, textwrap, statistics as st
+import csv
 
 METRIC_PATHS = list(Path(".").glob("rf_*_report.txt"))
 OUT_MD = Path("rf_run_summary.md")
+OUT_CSV = Path("rf_run_summary.csv")
 
 # ──────────────────────────────────────────────────────────────────
 # 1.  regex helpers
@@ -117,3 +119,31 @@ For broader monitoring (accepting more false alarms) consider the run ranked 2.
 
 OUT_MD.write_text("\n".join(md))
 print(f"✓ Markdown summary written → {OUT_MD.resolve()}")
+
+# ──────────────────────────────────────────────────────────────────
+# 3b.  build CSV
+# ──────────────────────────────────────────────────────────────────
+csv_headers = [
+    "rank", "csv", "neg/pos", "F1(target)", "Precision", "Recall",
+    "ROC-AUC", "FP", "FN", "accuracy"
+]
+
+with OUT_CSV.open("w", newline="") as fh:
+    writer = csv.writer(fh)
+    writer.writerow(csv_headers)
+    for rank, (fname, r) in enumerate(runs, 1):
+        writer.writerow([
+            rank,
+            r['csv'],
+            r['neg'],
+            round(r['f1_1'], 3),
+            round(r['prec1'], 3),
+            round(r['rec1'], 3),
+            round(r['roc_auc'], 3),
+            r['fp'],
+            r['fn'],
+            round(r['accuracy'], 3),
+        ])
+
+print(f"✓ CSV summary written → {OUT_CSV.resolve()}")
+
