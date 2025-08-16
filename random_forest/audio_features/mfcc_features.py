@@ -3,28 +3,38 @@ import numpy as np
 import librosa
 
 
-# or: from spafe.features.mfcc import mfcc as spafe_mfcc   # if you prefer spafe
-
 def mfcc_summary(
-        y, sr, t0, t1, n_mfcc=13, n_fft=2048, hop_length=512, include_deltas=True
+        y: np.ndarray,
+        sr: int,
+        t0: float,
+        t1: float,
+        *,
+        n_mfcc: int = 13,
+        n_fft: int = 2048,
+        hop_length: int = 512,
+        include_deltas: bool = True,
 ) -> dict:
     """
-    Frame-level MFCCs inside [t0, t1], then summarise (mean, std) per coefficient.
-    Returns a flat dict with keys: mfcc1_mean, mfcc1_std, ..., (and deltas if requested)
+    Compute MFCCs within [t0, t1] and summarise per coefficient (mean, std).
+    Keys: mfcc1_mean, mfcc1_std, ..., (and d_mfcc*, dd_mfcc* if include_deltas)
     """
-    i0 = max(0, int(round(t0 * sr)));
+    i0 = max(0, int(round(t0 * sr)))
     i1 = min(len(y), int(round(t1 * sr)))
-    seg = y[i0:i1]
-    if seg.size == 0:
+    if i1 <= i0:
         return {}
 
+    seg = y[i0:i1]
     M = librosa.feature.mfcc(y=seg, sr=sr, n_mfcc=n_mfcc, n_fft=n_fft, hop_length=hop_length)
-    feats = {}
+    feats: dict[str, float] = {}
 
-    def add_stats(mat, prefix):
-        feats.update({f"{prefix}{i + 1}_mean": float(mat[i].mean()) for i in range(mat.shape[0])})
-        feats.update({f"{prefix}{i + 1}_std": float(mat[i].std(ddof=1) if mat.shape[1] > 1 else 0.0)
-                      for i in range(mat.shape[0])})
+    def add_stats(mat: np.ndarray, prefix: str):
+        if mat.ndim != 2:
+            return
+        means = mat.mean(axis=1)
+        stds = mat.std(axis=1, ddof=1) if mat.shape[1] > 1 else np.zeros(mat.shape[0])
+        for i, (m, s) in enumerate(zip(means, stds), start=1):
+            feats[f"{prefix}{i}_mean"] = float(m)
+            feats[f"{prefix}{i}_std"] = float(s)
 
     add_stats(M, "mfcc")
     if include_deltas:
@@ -32,4 +42,5 @@ def mfcc_summary(
         D2 = librosa.feature.delta(M, order=2)
         add_stats(D1, "d_mfcc")
         add_stats(D2, "dd_mfcc")
+
     return feats
