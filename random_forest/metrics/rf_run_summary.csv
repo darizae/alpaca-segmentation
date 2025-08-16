@@ -3,5 +3,11 @@ rank,csv,neg/pos,F1(target),Precision,Recall,ROC-AUC,FP,FN,accuracy
 2,mfcc_with_labels.csv,1,0.879,0.8,0.974,0.963,38,4,0.9
 3,features_with_labels.csv,1,0.876,0.796,0.974,0.964,39,4,0.897
 4,mfcc_with_labels.csv,2,0.868,0.852,0.885,0.96,24,18,0.9
-5,spectral_with_labels.csv,1,0.813,0.832,0.795,0.928,25,32,0.864
-6,spectral_with_labels.csv,2,0.769,0.92,0.66,0.915,9,53,0.852
+5,features_py.csv,1,0.858,0.783,0.949,0.959,41,8,0.883
+6,features_py.csv,2,0.84,0.898,0.788,0.959,14,33,0.888
+7,mfcc_py.csv,2,0.835,0.879,0.795,0.948,17,32,0.883
+8,mfcc_py.csv,1,0.818,0.718,0.949,0.949,58,8,0.842
+9,spectral_with_labels.csv,1,0.813,0.832,0.795,0.928,25,32,0.864
+10,spectral_with_labels.csv,2,0.769,0.92,0.66,0.915,9,53,0.852
+11,spectral_robust_py.csv,1,0.755,0.781,0.731,0.91,32,42,0.823
+12,spectral_robust_py.csv,2,0.716,0.857,0.615,0.9,16,60,0.818

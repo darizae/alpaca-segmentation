@@ -17,12 +17,12 @@ from sklearn.metrics import (classification_report, confusion_matrix,
 from split_utils import load_features, grouped_train_test
 
 # ─────────── USER CONFIG ────────────────────────────────────────────
-CSV_CHOICE = "mfcc_with_labels.csv"  # or "mfcc_with_labels.csv" …
-NEG_PER_POS = 1  # None for raw; 1, 2, 3 for balanced subsets
+CSV_CHOICE = "spectral_robust_py.csv"  # or "mfcc_with_labels.csv" …
+NEG_PER_POS = 2  # None for raw; 1, 2, 3 for balanced subsets
 N_TREES = 800
 DATA_DIR = Path(
     "/Users/danie/repos/alpaca-segmentation/random_forest/data/"
-    "spectral_feature_annotations/processed"
+    "spectral_feature_annotations/py"
 )
 MODEL_DIR = Path("models");
 MODEL_DIR.mkdir(exist_ok=True)

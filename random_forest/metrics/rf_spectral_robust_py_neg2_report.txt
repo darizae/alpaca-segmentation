@@ -1,0 +1,14 @@
+Random Forest on spectral_robust_py.csv  (neg_per_pos=2)
+              precision    recall  f1-score   support
+
+           0      0.804     0.939     0.866       262
+           1      0.857     0.615     0.716       156
+
+    accuracy                          0.818       418
+   macro avg      0.831     0.777     0.791       418
+weighted avg      0.824     0.818     0.810       418
+
+Confusion:
+[[246  16]
+ [ 60  96]]
+ROC-AUC : 0.9000   PR-AUC : 0.8448

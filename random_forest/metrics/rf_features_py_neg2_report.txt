@@ -1,0 +1,14 @@
+Random Forest on features_py.csv  (neg_per_pos=2)
+              precision    recall  f1-score   support
+
+           0      0.883     0.947     0.913       262
+           1      0.898     0.788     0.840       156
+
+    accuracy                          0.888       418
+   macro avg      0.890     0.868     0.877       418
+weighted avg      0.888     0.888     0.886       418
+
+Confusion:
+[[248  14]
+ [ 33 123]]
+ROC-AUC : 0.9585   PR-AUC : 0.9345
