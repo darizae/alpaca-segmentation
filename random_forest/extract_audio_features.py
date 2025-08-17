@@ -22,11 +22,11 @@ from audio_features import raven_robust_features, mfcc_summary
 
 def parse_args():
     p = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    p.add_argument("--sel-dir", type=Path, default=Path("data/cnn_predictions/annotated"),
+    p.add_argument("--sel-dir", type=Path, default=Path("data/cnn_predictions/annotated_new"),
                    help="Folder containing selection-table .txt files")
     p.add_argument("--audio-dir", type=Path, default=Path("data/labelled_recordings"),
                    help="Folder containing the corresponding WAV files")
-    p.add_argument("--out-dir", type=Path, default=Path("data/spectral_feature_annotations/py"),
+    p.add_argument("--out-dir", type=Path, default=Path("data/spectral_feature_annotations/actually_with_logits"),
                    help="Destination folder for the output CSVs")
     # STFT / MFCC params
     p.add_argument("--n-fft", type=int, default=2048, help="STFT FFT size")
@@ -49,6 +49,8 @@ COL_ALIASES = {
     "Low Frequency (Hz)": "Low Freq (Hz)",
     "High Freq (Hz)": "High Freq (Hz)",
     "High Frequency (Hz)": "High Freq (Hz)",
+    "CNN logit (mean)": "cnn_logit_mean",
+    "cnn_logit_mean": "cnn_logit_mean",
     "Sound type": "Sound type",
     "Sound Type": "Sound type",
 }
@@ -175,6 +177,12 @@ def main():
                 lbl = label_series.iloc[i]
                 if lbl in {"target", "noise"}:
                     base["validated_label"] = lbl
+
+            if "cnn_logit_mean" in df.columns:
+                try:
+                    base["cnn_logit_mean"] = float(df.loc[i, "cnn_logit_mean"])
+                except Exception:
+                    raise Exception("Error reading logits column.")
 
             union_rows.append({**base, **spec, **mfc})
 
