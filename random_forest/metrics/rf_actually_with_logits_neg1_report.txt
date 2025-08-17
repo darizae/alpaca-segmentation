@@ -1,0 +1,18 @@
+Random Forest on actually_with_logits.csv  (neg_per_pos=1)
+              precision    recall  f1-score   support
+
+           0      0.976     0.906     0.940       318
+           1      0.826     0.953     0.885       149
+
+    accuracy                          0.921       467
+   macro avg      0.901     0.929     0.912       467
+weighted avg      0.928     0.921     0.922       467
+
+Confusion:
+[[288  30]
+ [  7 142]]
+ROC-AUC : 0.9695   PR-AUC : 0.9233
+
+Threshold suggestions:
+  - recall_first: t=0.532  (precision=0.858, recall=0.933, f2=0.072; policy=recall_first (rec≥0.93, min f2))
+  - F_beta      : t=0.518  (precision=0.850, recall=0.953, F_beta=0.910; beta=1.25)

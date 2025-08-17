@@ -1,0 +1,14 @@
+Random Forest on actually_with_logits.csv  (neg_per_pos=3)
+              precision    recall  f1-score   support
+
+           0      0.913     0.956     0.934       318
+           1      0.896     0.805     0.848       149
+
+    accuracy                          0.908       467
+   macro avg      0.904     0.881     0.891       467
+weighted avg      0.907     0.908     0.907       467
+
+Confusion:
+[[304  14]
+ [ 29 120]]
+ROC-AUC : 0.9692   PR-AUC : 0.9194

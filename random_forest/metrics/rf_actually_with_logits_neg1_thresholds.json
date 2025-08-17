@@ -1,0 +1,23 @@
+{
+  "csv_choice": "actually_with_logits.csv",
+  "neg_per_pos": 1,
+  "recall_floor": 0.93,
+  "beta": 1.25,
+  "suggestions": {
+    "recall_first": {
+      "threshold": 0.5323898809523809,
+      "precision": 0.8580246913580247,
+      "recall": 0.9328859060402684,
+      "f2": 0.07232704402515723,
+      "policy": "recall_first (rec\u22650.93, min f2)"
+    },
+    "f_beta": {
+      "threshold": 0.5176249999999999,
+      "precision": 0.8502994011976048,
+      "recall": 0.9530201342281879,
+      "fbeta": 0.9101141159918712,
+      "beta": 1.25,
+      "policy": "F_beta (beta=1.25)"
+    }
+  }
+}
