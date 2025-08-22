@@ -2,20 +2,21 @@
 """
 Evaluate alpaca-hum segmentation benchmark runs.
 
-Adds *per-tape* metrics:
----------------------------------
-Besides the existing aggregate metrics the script now
-writes a second CSV (``--per-tape-out``; default
-``metrics_per_tape.csv``) that contains one row for every
-(model, variant, tape) triple.
+Now supports evaluating either:
+  • baseline CNN selections:     BENCHMARK/runs/*/*/evaluation/index.json
+  • CNN+RF selections:           BENCHMARK/runs/*/*/postrf/index.json
+  • both (rows tagged via 'layer' column)
 
-Usage example (from repo root)
-------------------------------
-python data_postprocessing/evaluate_benchmark.py               \
-    --gt data/benchmark_corpus_v1/corpus_index.json            \
-    --runs BENCHMARK/runs                                      \
-    --iou 0.40                                                 \
-    --out metrics.csv                                          \
+Adds *per-tape* metrics (unchanged otherwise).
+
+Usage
+-----
+python data_postprocessing/evaluate_benchmark.py \
+    --gt data/benchmark_corpus_v1/corpus_index.json \
+    --runs BENCHMARK/runs \
+    --iou 0.40 \
+    --layer both \
+    --out metrics.csv \
     --per-tape-out metrics_per_tape.csv
 """
 from __future__ import annotations
@@ -165,12 +166,8 @@ def _base_metrics(m_gt, m_pr, pairs, gt_s, pr_s, gt_df, pr_df):
     return dict(
         n_gt=len(gt_df),
         n_pred=len(pr_df),
-        tp=tp,
-        fp=fp,
-        fn=fn,
-        precision=prec,
-        recall=rec,
-        f1=f1,
+        tp=tp, fp=fp, fn=fn,
+        precision=prec, recall=rec, f1=f1,
         mean_dstart_ms=dstart_ms,
         mean_dend_ms=dend_ms,
         **metrics_q,
@@ -178,13 +175,10 @@ def _base_metrics(m_gt, m_pr, pairs, gt_s, pr_s, gt_df, pr_df):
 
 
 def eval_variant(gt_df: pd.DataFrame, pred_idx: Path, iou: float) -> Dict:
-    """Global (all-tapes-pooled) metrics – unchanged from your original."""
     pr_df = read_pred_index(pred_idx)
     m_gt, m_pr, pairs, gt_s, pr_s = match_predictions(gt_df, pr_df, iou)
-
     base = _base_metrics(m_gt, m_pr, pairs, gt_s, pr_s, gt_df, pr_df)
-
-    # Per-tape call-rate correlations stay global
+    # Per-tape call-rate correlations (global)
     ct_gt = per_tape_counts(gt_df)
     ct_pr = per_tape_counts(pr_df).reindex(ct_gt.index, fill_value=0)
     base["pearson_calls"] = pearsonr(ct_gt, ct_pr)[0] if len(ct_gt) > 1 else np.nan
@@ -193,15 +187,12 @@ def eval_variant(gt_df: pd.DataFrame, pred_idx: Path, iou: float) -> Dict:
 
 
 def eval_variant_per_tape(gt_df: pd.DataFrame, pred_idx: Path, iou: float) -> List[Dict]:
-    """Return one record per tape for the given variant."""
     pr_df = read_pred_index(pred_idx)
     all_tapes = sorted(set(gt_df.tape.unique()).union(pr_df.tape.unique()))
     records = []
-
     for tape in all_tapes:
         gt_t = gt_df[gt_df.tape == tape]
         pr_t = pr_df[pr_df.tape == tape]
-
         m_gt, m_pr, pairs, gt_s, pr_s = match_predictions(gt_t, pr_t, iou)
         rec = _base_metrics(m_gt, m_pr, pairs, gt_s, pr_s, gt_t, pr_t)
         rec["tape"] = tape
@@ -224,38 +215,44 @@ def main():
     ap.add_argument("--runs", required=True, help="Folder with benchmark runs")
     ap.add_argument("--iou", type=float, default=0.40, help="IoU threshold")
     ap.add_argument("--out", default="metrics.csv", help="Global metrics CSV")
-    ap.add_argument(
-        "--per-tape-out",
-        default="metrics_per_tape.csv",
-        help="Per-tape metrics CSV",
-    )
+    ap.add_argument("--per-tape-out", default="metrics_per_tape.csv",help="Per-tape metrics CSV")
+    ap.add_argument("--layer", choices=["evaluation", "postrf", "both"], default="evaluation", help="Which prediction layer to evaluate")
     args = ap.parse_args()
 
     gt_df = read_gt_index(Path(args.gt))
 
-    run_roots = [
-        p for p in Path(args.runs).glob("*/*") if (p / "evaluation/index.json").exists()
-    ]
-    if not run_roots:
-        raise SystemExit("❌ no run results found")
+    runs_root = Path(args.runs).resolve()
+    all_runs = sorted(p for p in runs_root.glob("*/*") if p.is_dir())
+    if not all_runs:
+        raise SystemExit("❌ no runs found under --runs")
 
-    # global + per-tape accumulators
     glob_records: List[Dict] = []
     tape_records: List[Dict] = []
 
-    for run in tqdm(run_roots, desc="variants"):
+    def add_results(run: Path, subdir: str):
+        pred_idx = run / subdir / "index.json"
+        if not pred_idx.exists():
+            return False
         model, variant = tag_from(run)
-        pred_idx = run / "evaluation/index.json"
-
-        # overall
         rec = eval_variant(gt_df, pred_idx, args.iou)
-        rec.update(model=model, variant=variant)
+        rec.update(model=model, variant=variant, layer=subdir)
         glob_records.append(rec)
-
-        # per-tape
         for r in eval_variant_per_tape(gt_df, pred_idx, args.iou):
-            r.update(model=model, variant=variant)
+            r.update(model=model, variant=variant, layer=subdir)
             tape_records.append(r)
+        return True
+
+    # Iterate runs and collect per requested layer(s)
+    n_added = 0
+    for run in tqdm(all_runs, desc="variants"):
+        if args.layer in ("evaluation", "both"):
+            n_added += add_results(run, "evaluation")
+        if args.layer in ("postrf", "both"):
+            n_added += add_results(run, "postrf")
+
+    if not n_added:
+        which = "postrf/index.json" if args.layer == "postrf" else "evaluation/index.json"
+        raise SystemExit(f"❌ no run results found (looked for {which})")
 
     pd.DataFrame(glob_records).to_csv(args.out, index=False)
     pd.DataFrame(tape_records).to_csv(args.per_tape_out, index=False)

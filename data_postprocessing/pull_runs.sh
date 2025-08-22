@@ -8,7 +8,7 @@
 # Notes
 # ─────
 # • TRAINING → grabs */summaries/**
-# • BENCHMARK → grabs */evaluation/** and any   index.json   inside that folder
+# • BENCHMARK → grabs */evaluation/** AND */postrf/** (RF layer)
 # • Variant argument is treated as a *path suffix* under each remote base:
 #       └── TRAINING/runs/models/<VARIANT>
 #       └── BENCHMARK/runs/<VARIANT>
@@ -68,7 +68,7 @@ rsync -avz ${PROG_FLAG} \
   "${LOC_TRAIN_PATH}/"
 
 ################################################################################
-# 2️⃣  BENCHMARK  –  evaluation outputs
+# 2️⃣  BENCHMARK  –  evaluation + RF (postrf) outputs
 ################################################################################
 if [[ -n "$VARIANT" ]]; then
   REM_BENCH_PATH="${REMOTE_BENCH_BASE}/${VARIANT}"
@@ -86,8 +86,11 @@ mkdir -p "${LOC_BENCH_PATH}"
 
 rsync -avz ${PROG_FLAG} \
   --include '*/' \
+  --exclude '*/features_py/***' \
   --include 'evaluation/***' \
   --include 'evaluation/index.json' \
+  --include 'postrf/***' \
+  --include 'postrf/index.json' \
   --exclude '*' \
   "${REMOTE_USER}@${REMOTE_HOST}:${REM_BENCH_PATH}/" \
   "${LOC_BENCH_PATH}/"

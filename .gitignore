@@ -1,10 +1,8 @@
 # Ignore all folders in data/
 data/
 random_forest/data/audio_recordings/
+random_forest/models
 evaluation_test/
-
-BENCHMARK*/
-TRAINING*/
 
 # Ignore all .zip files in data/
 data/*.zip
