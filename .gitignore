@@ -4,6 +4,9 @@ random_forest/data/audio_recordings/
 random_forest/models
 evaluation_test/
 
+data_postprocessing/BENCHMARK_*
+data_postprocessing/TRAINING
+
 # Ignore all .zip files in data/
 data/*.zip
 
